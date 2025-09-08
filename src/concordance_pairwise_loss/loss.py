@@ -107,9 +107,14 @@ class ConcordancePairwiseLoss:
                 # If all censored, no comparable pairs exist anyway, use unit weights
                 ipcw = torch.ones(n, device=log_risks.device)
             else:
-                ipcw = get_ipcw(events, times)
+                # torchsurv's get_ipcw has device issues, so we compute on CPU then move to GPU
+                events_cpu = events.cpu()
+                times_cpu = times.cpu()
+                ipcw = get_ipcw(events_cpu, times_cpu)
+                # Move result back to the same device as log_risks
+                ipcw = ipcw.to(log_risks.device)
         elif self.use_ipcw and self.ipcw_weights is not None:
-            ipcw = self.ipcw_weights
+            ipcw = self.ipcw_weights.to(log_risks.device)
         else:
             ipcw = torch.ones(n, device=log_risks.device)
         

@@ -41,11 +41,25 @@ class SUPPORT2DataLoader(AbstractDataLoader):
     
     def load_data(self) -> Tuple[DataLoader, DataLoader, DataLoader, int]:
         """Load SUPPORT2 dataset and return dataloaders."""
-        from SurvSet.data import SurvLoader
+        import pickle
+        import os
         
-        # Load dataset using the correct SurvSet API
-        loader = SurvLoader()
-        df = loader.load_pickle('support2')
+        # Workaround for SurvSet package compatibility issue
+        # Directly load the pickle file instead of using SurvLoader
+        survset_path = os.path.join(os.path.dirname(__file__), '..', '..', '..', 'Anaconda3', 'envs', 'concordance-pairwise-loss', 'lib', 'site-packages', 'SurvSet', 'resources', 'pickles')
+        support2_path = os.path.join(survset_path, 'support2.pickle')
+        
+        # Alternative: try to find the SurvSet installation path dynamically
+        try:
+            import SurvSet
+            survset_base = os.path.dirname(SurvSet.__file__)
+            support2_path = os.path.join(survset_base, 'resources', 'pickles', 'support2.pickle')
+        except:
+            pass  # Use the hardcoded path above
+        
+        # Load the dataset
+        with open(support2_path, 'rb') as f:
+            df = pickle.load(f)
         
         # Check the structure of the dataset
         print(f"Dataset shape: {df.shape}")

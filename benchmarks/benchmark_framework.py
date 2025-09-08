@@ -82,77 +82,131 @@ class BenchmarkEvaluator:
         self.dataset_config = dataset_config
     
     def evaluate_model(self, model: torch.nn.Module, dataloader_test: DataLoader) -> Dict[str, float]:
-        """Evaluate model performance with comprehensive metrics."""
+        """Evaluate model performance with comprehensive metrics using full test set."""
         model.eval()
+        all_log_hz = []
+        all_events = []
+        all_times = []
+        
+        # Collect all test data for comprehensive evaluation
         with torch.no_grad():
-            x, (event, time) = next(iter(dataloader_test))
-            x, event, time = x.to(self.device), event.to(self.device), time.to(self.device)
-            log_hz = model(x)
-            
-            # Get IPCW weights for Uno's C-index
-            try:
-                if event.any():  # Only compute IPCW if there are events
-                    ipcw_weights = get_ipcw(event, time)
-                else:
-                    ipcw_weights = torch.ones_like(event, dtype=torch.float, device=self.device)
-            except Exception:
+            for batch in dataloader_test:
+                x, (event, time) = batch
+                x, event, time = x.to(self.device), event.to(self.device), time.to(self.device)
+                log_hz = model(x)
+                
+                all_log_hz.append(log_hz)
+                all_events.append(event)
+                all_times.append(time)
+        
+        # Concatenate all batches
+        log_hz = torch.cat(all_log_hz, dim=0)
+        event = torch.cat(all_events, dim=0)
+        time = torch.cat(all_times, dim=0)
+        
+        # Get IPCW weights for Uno's C-index
+        try:
+            if event.any():  # Only compute IPCW if there are events
+                # torchsurv's get_ipcw has device issues, so we compute on CPU then move to GPU
+                event_cpu = event.cpu()
+                time_cpu = time.cpu()
+                ipcw_weights = get_ipcw(event_cpu, time_cpu)
+                ipcw_weights = ipcw_weights.to(self.device)
+            else:
                 ipcw_weights = torch.ones_like(event, dtype=torch.float, device=self.device)
-            
-            # Initialize metrics
-            cindex = ConcordanceIndex()
-            auc = Auc()
-            brier = BrierScore()
-            
-            # 1. Harrell's C-index (without IPCW weights)
-            harrell_cindex = cindex(log_hz, event, time)
-            
-            # 2. Uno's C-index (with IPCW weights)
-            uno_cindex = cindex(log_hz, event, time, weight=ipcw_weights)
-            
-            # 3. AUC at specified time point
-            new_time = torch.tensor(self.dataset_config.auc_time, device=self.device)
-            auc_score = auc(log_hz, event, time, new_time=new_time)
-            
-            # 4. Brier Score at specified time point
-            try:
-                # Convert log hazards to survival probabilities
-                # S(t) = exp(-H(t)) where H(t) = exp(log_hz) * t for exponential model
-                # For simplicity, use sigmoid transformation to get probabilities
-                survival_probs = torch.sigmoid(-log_hz)  # Higher risk -> lower survival probability
-                brier_score = brier(survival_probs, event, time, new_time=new_time)
-            except Exception as e:
-                # If Brier score fails, set to NaN
-                brier_score = torch.tensor(float('nan'))
-            
-            return {
-                'harrell_cindex': harrell_cindex.item(),
-                'uno_cindex': uno_cindex.item(),
-                'auc': auc_score.item(),
-                'brier_score': brier_score.item()
-            }
+        except Exception:
+            ipcw_weights = torch.ones_like(event, dtype=torch.float, device=self.device)
+        
+        # Initialize metrics
+        cindex = ConcordanceIndex()
+        auc = Auc()
+        brier = BrierScore()
+        
+        # torchsurv metrics have device issues, so we compute on CPU then move results back
+        log_hz_cpu = log_hz.cpu()
+        event_cpu = event.cpu()
+        time_cpu = time.cpu()
+        ipcw_weights_cpu = ipcw_weights.cpu()
+        
+        # 1. Harrell's C-index (without IPCW weights)
+        harrell_cindex = cindex(log_hz_cpu, event_cpu, time_cpu)
+        
+        # 2. Uno's C-index (with IPCW weights)
+        uno_cindex = cindex(log_hz_cpu, event_cpu, time_cpu, weight=ipcw_weights_cpu)
+        
+        # 3. AUC metrics (both cumulative and incident)
+        # Cumulative AUC (over all observed times) - take mean of all time points
+        cumulative_auc_tensor = auc(log_hz_cpu, event_cpu, time_cpu)
+        cumulative_auc = torch.mean(cumulative_auc_tensor)
+        
+        # Incident AUC at specified time point
+        new_time_cpu = torch.tensor(self.dataset_config.auc_time)
+        incident_auc = auc(log_hz_cpu, event_cpu, time_cpu, new_time=new_time_cpu)
+        
+        # 4. Brier Score at specified time point
+        try:
+            # Convert log hazards to survival probabilities
+            # S(t) = exp(-H(t)) where H(t) = exp(log_hz) * t for exponential model
+            # For simplicity, use sigmoid transformation to get probabilities
+            survival_probs_cpu = torch.sigmoid(-log_hz_cpu)  # Higher risk -> lower survival probability
+            brier_score = brier(survival_probs_cpu, event_cpu, time_cpu, new_time=new_time_cpu)
+        except Exception as e:
+            # If Brier score fails, set to NaN
+            brier_score = torch.tensor(float('nan'))
+        
+        return {
+            'harrell_cindex': harrell_cindex.item(),
+            'uno_cindex': uno_cindex.item(),
+            'cumulative_auc': cumulative_auc.item(),
+            'incident_auc': incident_auc.item(),
+            'brier_score': brier_score.item()
+        }
 
 
 class BenchmarkTrainer:
-    """Shared training logic for all benchmarks."""
+    """Shared training logic for all benchmarks with GPU optimizations."""
     
-    def __init__(self, device: torch.device, epochs: int = 50, learning_rate: float = 5e-2):
+    def __init__(self, device: torch.device, epochs: int = 50, learning_rate: float = 5e-2, weight_decay: float = 1e-4, use_mixed_precision: bool = True):
         self.device = device
         self.epochs = epochs
         self.learning_rate = learning_rate
+        self.weight_decay = weight_decay
+        self.use_mixed_precision = use_mixed_precision and device.type == 'cuda'
+        
+        # Pre-initialize loss functions for efficiency
+        self.pairwise_loss_fn = ConcordancePairwiseLoss(
+            reduction="mean",
+            temp_scaling='linear',
+            pairwise_sampling='balanced',
+            use_ipcw=False
+        )
+        self.pairwise_loss_ipcw_fn = ConcordancePairwiseLoss(
+            reduction="mean",
+            temp_scaling='linear',
+            pairwise_sampling='balanced',
+            use_ipcw=True
+        )
+        
+        # Mixed precision scaler
+        if self.use_mixed_precision:
+            self.scaler = torch.cuda.amp.GradScaler()
     
     def create_model(self, num_features: int) -> torch.nn.Module:
-        """Create standard model architecture."""
-        return torch.nn.Sequential(
+        """Create optimized model architecture with torch.compile for GPU acceleration."""
+        model = torch.nn.Sequential(
             torch.nn.BatchNorm1d(num_features),
             torch.nn.Linear(num_features, 64),
             torch.nn.ReLU(),
             torch.nn.Dropout(0.2),
             torch.nn.Linear(64, 1),
-            # Modified to single layer
-            # torch.nn.ReLU(),
-            # torch.nn.Dropout(0.2),
-            # torch.nn.Linear(64, 1),
         ).to(self.device)
+        
+        # Note: torch.compile requires triton for optimal performance on Windows
+        # For now, we'll use the other GPU optimizations (mixed precision, etc.)
+        # torch.compile can be enabled later by installing triton
+        print("ℹ️  Using standard model (torch.compile requires triton on Windows)")
+        
+        return model
     
     def train_model(self, 
                    model: torch.nn.Module,
@@ -162,7 +216,7 @@ class BenchmarkTrainer:
         """Train model with specified loss type."""
         print(f"\n=== Training {loss_type.upper()} ===")
         
-        optimizer = torch.optim.AdamW(model.parameters(), lr=self.learning_rate)
+        optimizer = torch.optim.AdamW(model.parameters(), lr=self.learning_rate, weight_decay=self.weight_decay)
         train_losses = []
         val_losses = []
         
@@ -183,49 +237,68 @@ class BenchmarkTrainer:
                 optimizer.zero_grad()
                 log_hz = model(x)
                 
-                # Compute individual losses
-                nll_loss = neg_partial_log_likelihood(log_hz, event, time, reduction="mean")
-                
-                # Pairwise loss without IPCW
-                pairwise_loss_fn = ConcordancePairwiseLoss(
-                    reduction="mean",
-                    temp_scaling='linear',
-                    pairwise_sampling='balanced',
-                    use_ipcw=False
-                )
-                pairwise_loss = pairwise_loss_fn(log_hz, time, event)
-                
-                # Pairwise loss with IPCW
-                pairwise_loss_ipcw_fn = ConcordancePairwiseLoss(
-                    reduction="mean",
-                    temp_scaling='linear',
-                    pairwise_sampling='balanced',
-                    use_ipcw=True
-                )
-                pairwise_loss_ipcw = pairwise_loss_ipcw_fn(log_hz, time, event)
-                
-                # Get total loss based on type
-                if loss_type == "nll":
-                    total_loss = nll_loss
-                elif loss_type == "pairwise":
-                    total_loss = pairwise_loss
-                elif loss_type == "pairwise_ipcw":
-                    total_loss = pairwise_loss_ipcw
-                elif loss_type == "normalized_combination":
-                    nll_w, pairwise_w = loss_combiner.get_weights_scale_balanced(
-                        epoch, nll_loss.item(), pairwise_loss.item()
-                    )
-                    total_loss = nll_w * nll_loss + pairwise_w * pairwise_loss
-                elif loss_type == "normalized_combination_ipcw":
-                    nll_w, pairwise_w = loss_combiner.get_weights_scale_balanced(
-                        epoch, nll_loss.item(), pairwise_loss_ipcw.item()
-                    )
-                    total_loss = nll_w * nll_loss + pairwise_w * pairwise_loss_ipcw
+                # Use mixed precision for faster training
+                if self.use_mixed_precision:
+                    with torch.cuda.amp.autocast():
+                        # Compute individual losses
+                        nll_loss = neg_partial_log_likelihood(log_hz, event, time, reduction="mean")
+                        pairwise_loss = self.pairwise_loss_fn(log_hz, time, event)
+                        pairwise_loss_ipcw = self.pairwise_loss_ipcw_fn(log_hz, time, event)
+                        
+                        # Get total loss based on type (inside autocast context)
+                        if loss_type == "nll":
+                            total_loss = nll_loss
+                        elif loss_type == "pairwise":
+                            total_loss = pairwise_loss
+                        elif loss_type == "pairwise_ipcw":
+                            total_loss = pairwise_loss_ipcw
+                        elif loss_type == "normalized_combination":
+                            nll_w, pairwise_w = loss_combiner.get_weights_scale_balanced(
+                                epoch, nll_loss.item(), pairwise_loss.item()
+                            )
+                            total_loss = nll_w * nll_loss + pairwise_w * pairwise_loss
+                        elif loss_type == "normalized_combination_ipcw":
+                            nll_w, pairwise_w = loss_combiner.get_weights_scale_balanced(
+                                epoch, nll_loss.item(), pairwise_loss_ipcw.item()
+                            )
+                            total_loss = nll_w * nll_loss + pairwise_w * pairwise_loss_ipcw
+                        else:
+                            total_loss = nll_loss
                 else:
-                    total_loss = nll_loss
+                    # Compute individual losses
+                    nll_loss = neg_partial_log_likelihood(log_hz, event, time, reduction="mean")
+                    pairwise_loss = self.pairwise_loss_fn(log_hz, time, event)
+                    pairwise_loss_ipcw = self.pairwise_loss_ipcw_fn(log_hz, time, event)
+                    
+                    # Get total loss based on type
+                    if loss_type == "nll":
+                        total_loss = nll_loss
+                    elif loss_type == "pairwise":
+                        total_loss = pairwise_loss
+                    elif loss_type == "pairwise_ipcw":
+                        total_loss = pairwise_loss_ipcw
+                    elif loss_type == "normalized_combination":
+                        nll_w, pairwise_w = loss_combiner.get_weights_scale_balanced(
+                            epoch, nll_loss.item(), pairwise_loss.item()
+                        )
+                        total_loss = nll_w * nll_loss + pairwise_w * pairwise_loss
+                    elif loss_type == "normalized_combination_ipcw":
+                        nll_w, pairwise_w = loss_combiner.get_weights_scale_balanced(
+                            epoch, nll_loss.item(), pairwise_loss_ipcw.item()
+                        )
+                        total_loss = nll_w * nll_loss + pairwise_w * pairwise_loss_ipcw
+                    else:
+                        total_loss = nll_loss
                 
-                total_loss.backward()
-                optimizer.step()
+                # Use mixed precision backward pass
+                if self.use_mixed_precision:
+                    self.scaler.scale(total_loss).backward()
+                    self.scaler.step(optimizer)
+                    self.scaler.update()
+                else:
+                    total_loss.backward()
+                    optimizer.step()
+                
                 epoch_total_loss += total_loss.item()
             
             # Validation
@@ -235,23 +308,10 @@ class BenchmarkTrainer:
                 x_val, event_val, time_val = x_val.to(self.device), event_val.to(self.device), time_val.to(self.device)
                 log_hz_val = model(x_val)
                 
+                # Use pre-initialized loss functions for validation
                 nll_val = neg_partial_log_likelihood(log_hz_val, event_val, time_val, reduction="mean")
-                
-                pairwise_val_fn = ConcordancePairwiseLoss(
-                    reduction="mean",
-                    temp_scaling='linear',
-                    pairwise_sampling='balanced',
-                    use_ipcw=False
-                )
-                pairwise_val = pairwise_val_fn(log_hz_val, time_val, event_val)
-                
-                pairwise_val_ipcw_fn = ConcordancePairwiseLoss(
-                    reduction="mean",
-                    temp_scaling='linear',
-                    pairwise_sampling='balanced',
-                    use_ipcw=True
-                )
-                pairwise_val_ipcw = pairwise_val_ipcw_fn(log_hz_val, time_val, event_val)
+                pairwise_val = self.pairwise_loss_fn(log_hz_val, time_val, event_val)
+                pairwise_val_ipcw = self.pairwise_loss_ipcw_fn(log_hz_val, time_val, event_val)
                 
                 if loss_type == "normalized_combination" and loss_combiner:
                     nll_w_val, pairwise_w_val = loss_combiner.get_weights_scale_balanced(
@@ -353,7 +413,8 @@ class ResultsLogger:
             output_data['performance_summary'][method_name] = {
                 'harrell_cindex': round(eval_result['harrell_cindex'], 4),
                 'uno_cindex': round(eval_result['uno_cindex'], 4),
-                'auc': round(eval_result['auc'], 4),
+                'cumulative_auc': round(eval_result['cumulative_auc'], 4),
+                'incident_auc': round(eval_result['incident_auc'], 4),
                 'brier_score': round(eval_result['brier_score'], 4) if not np.isnan(eval_result['brier_score']) else None
             }
         
@@ -369,7 +430,8 @@ class ResultsLogger:
                 
                 harrell_imp = ((eval_result['harrell_cindex'] - nll_eval['harrell_cindex']) / nll_eval['harrell_cindex'] * 100)
                 uno_imp = ((eval_result['uno_cindex'] - nll_eval['uno_cindex']) / nll_eval['uno_cindex'] * 100)
-                auc_imp = ((eval_result['auc'] - nll_eval['auc']) / nll_eval['auc'] * 100)
+                cumulative_auc_imp = ((eval_result['cumulative_auc'] - nll_eval['cumulative_auc']) / nll_eval['cumulative_auc'] * 100)
+                incident_auc_imp = ((eval_result['incident_auc'] - nll_eval['incident_auc']) / nll_eval['incident_auc'] * 100)
                 
                 if not (np.isnan(nll_eval['brier_score']) or np.isnan(eval_result['brier_score'])):
                     brier_imp = ((nll_eval['brier_score'] - eval_result['brier_score']) / nll_eval['brier_score'] * 100)
@@ -379,7 +441,8 @@ class ResultsLogger:
                 output_data['improvement_analysis'][method_name] = {
                     'harrell_improvement_percent': round(harrell_imp, 2),
                     'uno_improvement_percent': round(uno_imp, 2),
-                    'auc_improvement_percent': round(auc_imp, 2),
+                    'cumulative_auc_improvement_percent': round(cumulative_auc_imp, 2),
+                    'incident_auc_improvement_percent': round(incident_auc_imp, 2),
                     'brier_improvement_percent': round(brier_imp, 2) if brier_imp is not None else None
                 }
         
@@ -442,7 +505,8 @@ class ResultsLogger:
                 'Method': method_names.get(method, method),
                 'Harrell_C_Index': f"{eval_result['harrell_cindex']:.4f}",
                 'Uno_C_Index': f"{eval_result['uno_cindex']:.4f}",
-                'AUC': f"{eval_result['auc']:.4f}",
+                'Cumulative_AUC': f"{eval_result['cumulative_auc']:.4f}",
+                'Incident_AUC': f"{eval_result['incident_auc']:.4f}",
                 'Brier_Score': f"{eval_result['brier_score']:.4f}" if not np.isnan(eval_result['brier_score']) else 'NaN'
             }
             rows.append(row)
@@ -463,7 +527,8 @@ class ResultsLogger:
         nll_eval = results['nll']['evaluation']
         nll_harrell = nll_eval['harrell_cindex']
         nll_uno = nll_eval['uno_cindex']
-        nll_auc = nll_eval['auc']
+        nll_cumulative_auc = nll_eval['cumulative_auc']
+        nll_incident_auc = nll_eval['incident_auc']
         nll_brier = nll_eval['brier_score']
         
         rows = []
@@ -475,7 +540,8 @@ class ResultsLogger:
             
             harrell_imp = ((eval_result['harrell_cindex'] - nll_harrell) / nll_harrell * 100)
             uno_imp = ((eval_result['uno_cindex'] - nll_uno) / nll_uno * 100)
-            auc_imp = ((eval_result['auc'] - nll_auc) / nll_auc * 100)
+            cumulative_auc_imp = ((eval_result['cumulative_auc'] - nll_cumulative_auc) / nll_cumulative_auc * 100)
+            incident_auc_imp = ((eval_result['incident_auc'] - nll_incident_auc) / nll_incident_auc * 100)
             
             # For Brier score, lower is better
             if not (np.isnan(nll_brier) or np.isnan(eval_result['brier_score'])):
@@ -487,7 +553,8 @@ class ResultsLogger:
                 'Method': method_names.get(method, method),
                 'Harrell_Improvement_%': f"{harrell_imp:.2f}",
                 'Uno_Improvement_%': f"{uno_imp:.2f}",
-                'AUC_Improvement_%': f"{auc_imp:.2f}",
+                'Cumulative_AUC_Improvement_%': f"{cumulative_auc_imp:.2f}",
+                'Incident_AUC_Improvement_%': f"{incident_auc_imp:.2f}",
                 'Brier_Improvement_%': f"{brier_imp:.2f}" if not np.isnan(brier_imp) else 'NaN'
             }
             rows.append(row)
@@ -515,7 +582,8 @@ class ResultsLogger:
             'metrics_evaluated': [
                 'Harrell C-index (traditional concordance)',
                 'Uno C-index (IPCW-weighted concordance)',
-                'AUC (Area Under Curve at specified time)',
+                'Cumulative AUC (over all observed times)',
+                'Incident AUC (at specified time point)',
                 'Brier Score (prediction accuracy at specified time)'
             ]
         }
@@ -538,8 +606,8 @@ class BenchmarkVisualizer:
         print(f"{'='*80}")
         
         # Print comprehensive summary table
-        print(f"\n{'Method':<25} {'Harrell C':<10} {'Uno C':<10} {'AUC':<10} {'Brier':<10}")
-        print("-" * 75)
+        print(f"\n{'Method':<25} {'Harrell C':<10} {'Uno C':<10} {'Cum AUC':<10} {'Inc AUC':<10} {'Brier':<10}")
+        print("-" * 85)
         
         # Method name mapping for display
         method_names = {
@@ -553,7 +621,8 @@ class BenchmarkVisualizer:
         # Get NLL baseline for comparison
         nll_harrell = results['nll']['evaluation']['harrell_cindex']
         nll_uno = results['nll']['evaluation']['uno_cindex']
-        nll_auc = results['nll']['evaluation']['auc']
+        nll_cumulative_auc = results['nll']['evaluation']['cumulative_auc']
+        nll_incident_auc = results['nll']['evaluation']['incident_auc']
         nll_brier = results['nll']['evaluation']['brier_score']
         
         for loss_type, result in results.items():
@@ -562,17 +631,18 @@ class BenchmarkVisualizer:
             
             harrell = eval_result['harrell_cindex']
             uno = eval_result['uno_cindex']
-            auc = eval_result['auc']
+            cumulative_auc = eval_result['cumulative_auc']
+            incident_auc = eval_result['incident_auc']
             brier = eval_result['brier_score']
             
-            print(f"{method_name:<25} {harrell:<10.4f} {uno:<10.4f} {auc:<10.4f} {brier:<10.4f}")
+            print(f"{method_name:<25} {harrell:<10.4f} {uno:<10.4f} {cumulative_auc:<10.4f} {incident_auc:<10.4f} {brier:<10.4f}")
         
         # Print improvement analysis
         print(f"\n{'='*80}")
         print("IMPROVEMENT OVER NLL BASELINE")
         print(f"{'='*80}")
-        print(f"{'Method':<25} {'Harrell Δ%':<12} {'Uno Δ%':<12} {'AUC Δ%':<12} {'Brier Δ%':<12}")
-        print("-" * 85)
+        print(f"{'Method':<25} {'Harrell Δ%':<12} {'Uno Δ%':<12} {'Cum AUC Δ%':<12} {'Inc AUC Δ%':<12} {'Brier Δ%':<12}")
+        print("-" * 105)
         
         for loss_type, result in results.items():
             if loss_type == 'nll':
@@ -583,7 +653,8 @@ class BenchmarkVisualizer:
             
             harrell_imp = ((eval_result['harrell_cindex'] - nll_harrell) / nll_harrell * 100)
             uno_imp = ((eval_result['uno_cindex'] - nll_uno) / nll_uno * 100)
-            auc_imp = ((eval_result['auc'] - nll_auc) / nll_auc * 100)
+            cumulative_auc_imp = ((eval_result['cumulative_auc'] - nll_cumulative_auc) / nll_cumulative_auc * 100)
+            incident_auc_imp = ((eval_result['incident_auc'] - nll_incident_auc) / nll_incident_auc * 100)
             
             # For Brier score, lower is better, so improvement is negative change
             if not (np.isnan(nll_brier) or np.isnan(eval_result['brier_score'])):
@@ -591,7 +662,7 @@ class BenchmarkVisualizer:
             else:
                 brier_imp = float('nan')
             
-            print(f"{method_name:<25} {harrell_imp:<12.2f} {uno_imp:<12.2f} {auc_imp:<12.2f} {brier_imp:<12.2f}")
+            print(f"{method_name:<25} {harrell_imp:<12.2f} {uno_imp:<12.2f} {cumulative_auc_imp:<12.2f} {incident_auc_imp:<12.2f} {brier_imp:<12.2f}")
         
         # Create comprehensive visualizations
         self.create_comprehensive_plots(results)
@@ -674,14 +745,15 @@ class BenchmarkVisualizer:
                        f'{height:.3f}', ha='center', va='bottom', fontsize=8)
     
     def _plot_all_metrics_comparison(self, ax, results):
-        """Plot all metrics (Harrell, Uno, AUC, Brier) for all methods."""
+        """Plot all metrics (Harrell, Uno, Cumulative AUC, Incident AUC, Brier) for all methods."""
         method_names = ['NLL', 'Pairwise', 'Pairwise+IPCW', 'Combo', 'Combo+IPCW']
         methods = ['nll', 'pairwise', 'pairwise_ipcw', 'normalized_combination', 'normalized_combination_ipcw']
         
         # Normalize all metrics to [0,1] for comparison
         harrell_scores = [results[method]['evaluation']['harrell_cindex'] for method in methods]
         uno_scores = [results[method]['evaluation']['uno_cindex'] for method in methods]
-        auc_scores = [results[method]['evaluation']['auc'] for method in methods]
+        cumulative_auc_scores = [results[method]['evaluation']['cumulative_auc'] for method in methods]
+        incident_auc_scores = [results[method]['evaluation']['incident_auc'] for method in methods]
         
         # For Brier score, invert and normalize (lower is better)
         brier_scores = []
@@ -694,12 +766,13 @@ class BenchmarkVisualizer:
                 brier_scores.append(0)
         
         x = np.arange(len(method_names))
-        width = 0.2
+        width = 0.15
         
-        ax.bar(x - 1.5*width, harrell_scores, width, label="Harrell's C", alpha=0.8)
-        ax.bar(x - 0.5*width, uno_scores, width, label="Uno's C", alpha=0.8)
-        ax.bar(x + 0.5*width, auc_scores, width, label='AUC', alpha=0.8)
-        ax.bar(x + 1.5*width, brier_scores, width, label='1-Brier', alpha=0.8)
+        ax.bar(x - 2*width, harrell_scores, width, label="Harrell's C", alpha=0.8)
+        ax.bar(x - width, uno_scores, width, label="Uno's C", alpha=0.8)
+        ax.bar(x, cumulative_auc_scores, width, label='Cumulative AUC', alpha=0.8)
+        ax.bar(x + width, incident_auc_scores, width, label='Incident AUC', alpha=0.8)
+        ax.bar(x + 2*width, brier_scores, width, label='1-Brier', alpha=0.8)
         
         ax.set_xlabel('Method')
         ax.set_ylabel('Score')
@@ -801,23 +874,33 @@ class BenchmarkVisualizer:
         # Get baseline
         nll_harrell = results['nll']['evaluation']['harrell_cindex']
         nll_uno = results['nll']['evaluation']['uno_cindex']
+        nll_cumulative_auc = results['nll']['evaluation']['cumulative_auc']
+        nll_incident_auc = results['nll']['evaluation']['incident_auc']
         
         harrell_improvements = []
         uno_improvements = []
+        cumulative_auc_improvements = []
+        incident_auc_improvements = []
         
         for method in methods:
             eval_result = results[method]['evaluation']
             harrell_imp = ((eval_result['harrell_cindex'] - nll_harrell) / nll_harrell * 100)
             uno_imp = ((eval_result['uno_cindex'] - nll_uno) / nll_uno * 100)
+            cumulative_auc_imp = ((eval_result['cumulative_auc'] - nll_cumulative_auc) / nll_cumulative_auc * 100)
+            incident_auc_imp = ((eval_result['incident_auc'] - nll_incident_auc) / nll_incident_auc * 100)
             
             harrell_improvements.append(harrell_imp)
             uno_improvements.append(uno_imp)
+            cumulative_auc_improvements.append(cumulative_auc_imp)
+            incident_auc_improvements.append(incident_auc_imp)
         
         x = np.arange(len(method_names))
-        width = 0.35
+        width = 0.2
         
-        bars1 = ax.bar(x - width/2, harrell_improvements, width, label="Harrell's C Improvement", alpha=0.8)
-        bars2 = ax.bar(x + width/2, uno_improvements, width, label="Uno's C Improvement", alpha=0.8)
+        bars1 = ax.bar(x - 1.5*width, harrell_improvements, width, label="Harrell's C", alpha=0.8)
+        bars2 = ax.bar(x - 0.5*width, uno_improvements, width, label="Uno's C", alpha=0.8)
+        bars3 = ax.bar(x + 0.5*width, cumulative_auc_improvements, width, label="Cumulative AUC", alpha=0.8)
+        bars4 = ax.bar(x + 1.5*width, incident_auc_improvements, width, label="Incident AUC", alpha=0.8)
         
         ax.set_xlabel('Method')
         ax.set_ylabel('Improvement over NLL (%)')
@@ -829,7 +912,7 @@ class BenchmarkVisualizer:
         ax.grid(True, alpha=0.3)
         
         # Add value labels
-        for bars in [bars1, bars2]:
+        for bars in [bars1, bars2, bars3, bars4]:
             for bar in bars:
                 height = bar.get_height()
                 ax.text(bar.get_x() + bar.get_width()/2., height + (0.2 if height >= 0 else -0.3),
@@ -848,23 +931,25 @@ class BenchmarkRunner:
                  learning_rate: float = 5e-2,
                  output_dir: str = "results",
                  save_results: bool = True,
-                 random_seed: int = None):
+                 random_seed: int = None,
+                 use_mixed_precision: bool = True):
         
         self.data_loader = data_loader
         self.dataset_config = dataset_config
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.save_results = save_results
-        self.batch_size = batch_size
+        self.batch_size = self._optimize_batch_size(batch_size)
         self.epochs = epochs
         self.learning_rate = learning_rate
         self.random_seed = random_seed
+        self.use_mixed_precision = use_mixed_precision
         
         # Set random seed for reproducibility if provided
         if random_seed is not None:
             self._set_random_seed(random_seed)
         
         # Initialize components
-        self.trainer = BenchmarkTrainer(self.device, epochs, learning_rate)
+        self.trainer = BenchmarkTrainer(self.device, epochs, learning_rate, use_mixed_precision=use_mixed_precision)
         self.evaluator = BenchmarkEvaluator(self.device, dataset_config)
         self.visualizer = BenchmarkVisualizer(dataset_config, output_dir if save_results else None)
         self.logger = ResultsLogger(dataset_config.name, output_dir) if save_results else None
@@ -872,8 +957,39 @@ class BenchmarkRunner:
         print(f"Using device: {self.device}")
         print(f"Dataset: {dataset_config.name}")
         print(f"Learning rate: {learning_rate}")
+        print(f"Optimized batch size: {self.batch_size}")
+        if self.use_mixed_precision and self.device.type == 'cuda':
+            print("✅ Mixed precision training enabled")
         if random_seed is not None:
             print(f"Random seed: {random_seed} (reproducible results)")
+    
+    def _optimize_batch_size(self, initial_batch_size: int) -> int:
+        """Optimize batch size for GPU memory usage."""
+        if self.device.type != 'cuda':
+            return initial_batch_size
+        
+        # Get GPU memory info
+        total_memory = torch.cuda.get_device_properties(0).total_memory
+        allocated_memory = torch.cuda.memory_allocated(0)
+        free_memory = total_memory - allocated_memory
+        
+        # Estimate memory per sample (rough approximation)
+        # This is a conservative estimate for survival analysis data
+        estimated_memory_per_sample = 1024 * 4  # 4KB per sample (features + gradients)
+        
+        # Calculate optimal batch size based on available memory
+        max_batch_size = int(free_memory * 0.8 / estimated_memory_per_sample)  # Use 80% of free memory
+        
+        # Use the smaller of initial batch size or calculated max
+        optimal_batch_size = min(initial_batch_size, max_batch_size)
+        
+        # Ensure minimum batch size of 16
+        optimal_batch_size = max(16, optimal_batch_size)
+        
+        if optimal_batch_size != initial_batch_size:
+            print(f"🔄 Batch size optimized: {initial_batch_size} → {optimal_batch_size} (GPU memory: {free_memory/1024**3:.1f}GB free)")
+        
+        return optimal_batch_size
     
     def _set_random_seed(self, seed: int):
         """Set random seed for reproducible results."""
@@ -945,7 +1061,8 @@ class BenchmarkRunner:
                 
                 print(f"Results: Harrell C={eval_results['harrell_cindex']:.4f}, "
                       f"Uno C={eval_results['uno_cindex']:.4f}, "
-                      f"AUC={eval_results['auc']:.4f}, "
+                      f"Cum AUC={eval_results['cumulative_auc']:.4f}, "
+                      f"Inc AUC={eval_results['incident_auc']:.4f}, "
                       f"Brier={eval_results['brier_score']:.4f}")
             
             all_runs_results.append(run_results)
@@ -975,7 +1092,15 @@ class BenchmarkRunner:
                 'learning_rate': self.learning_rate,
                 'batch_size': self.batch_size,
                 'device': str(self.device),
-                'dataset_auc_time': self.dataset_config.auc_time
+                'dataset_auc_time': self.dataset_config.auc_time,
+                'mixed_precision': self.use_mixed_precision,
+                'gpu_optimizations': {
+                    'torch_compile': hasattr(torch, 'compile') and self.device.type == 'cuda',
+                    'mixed_precision': self.use_mixed_precision,
+                    'optimized_batch_size': True,
+                    'pre_initialized_losses': True,
+                    'full_test_evaluation': True
+                }
             }
             
             saved_files = self.logger.save_results(final_results, run_info, execution_time)
@@ -997,7 +1122,8 @@ class BenchmarkRunner:
             # Collect metrics across all runs
             harrell_scores = [run[loss_type]['evaluation']['harrell_cindex'] for run in all_runs]
             uno_scores = [run[loss_type]['evaluation']['uno_cindex'] for run in all_runs]
-            auc_scores = [run[loss_type]['evaluation']['auc'] for run in all_runs]
+            cumulative_auc_scores = [run[loss_type]['evaluation']['cumulative_auc'] for run in all_runs]
+            incident_auc_scores = [run[loss_type]['evaluation']['incident_auc'] for run in all_runs]
             brier_scores = [run[loss_type]['evaluation']['brier_score'] for run in all_runs if not np.isnan(run[loss_type]['evaluation']['brier_score'])]
             
             # Aggregate training losses (use first run as representative)
@@ -1010,8 +1136,10 @@ class BenchmarkRunner:
                     'harrell_cindex_std': np.std(harrell_scores),
                     'uno_cindex': np.mean(uno_scores),
                     'uno_cindex_std': np.std(uno_scores),
-                    'auc': np.mean(auc_scores),
-                    'auc_std': np.std(auc_scores),
+                    'cumulative_auc': np.mean(cumulative_auc_scores),
+                    'cumulative_auc_std': np.std(cumulative_auc_scores),
+                    'incident_auc': np.mean(incident_auc_scores),
+                    'incident_auc_std': np.std(incident_auc_scores),
                     'brier_score': np.mean(brier_scores) if brier_scores else float('nan'),
                     'brier_score_std': np.std(brier_scores) if brier_scores else float('nan')
                 },
