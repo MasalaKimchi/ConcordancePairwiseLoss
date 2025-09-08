@@ -103,28 +103,6 @@ ConcordancePairwiseLoss/
 └── README.md                      # This file
 ```
 
-## Key Improvements
-
-### 1. **Code Consolidation**
-- **Before**: 3 copies of `NormalizedLossCombination` class (~120 lines total)
-- **After**: 1 copy in `src/concordance_pairwise_loss/dynamic_weighting.py`
-- **Benefit**: Single source of truth, easier maintenance
-
-### 2. **Proper Statistical Analysis**
-- **Before**: Fixed seed (42) → identical results across runs
-- **After**: Different seeds per run → proper statistical variation
-- **Benefit**: Real confidence intervals and statistical significance
-
-### 3. **Clean Documentation**
-- **Before**: 4+ markdown files with redundant information
-- **After**: Single, concise README with essential information
-- **Benefit**: Easy to read, maintain, and understand
-
-### 4. **GitHub Best Practices**
-- **Removed**: Unnecessary directories and files
-- **Organized**: Clear separation of concerns
-- **Maintained**: Essential functionality and examples
-- **Result**: Professional, maintainable project structure
 
 ## License
 
