@@ -46,24 +46,31 @@ nll_w, pairwise_w = loss_combiner.get_weights_scale_balanced(
 
 ## Running Benchmarks
 
-### Individual Dataset Benchmarks
+The comprehensive benchmark suite includes **9 diverse survival analysis datasets** for robust evaluation. See `benchmarks/README.md` for complete documentation.
+
+### Quick Start
 ```bash
-# GBSG2 dataset
+# Quick test (3 epochs, no saving)
+python benchmarks/flchain_benchmark.py --epochs 3 --no-save
+
+# Standard evaluation (50 epochs, save results)
 python benchmarks/gbsg2_benchmark.py
 
-# Lung dataset
-python benchmarks/lung_benchmark.py
-
-# Rossi dataset
-python benchmarks/rossi_benchmark.py
+# Multiple runs for statistical robustness
+python benchmarks/whas500_benchmark.py --runs 5 --epochs 100
 ```
 
+### Available Datasets
+- **Large datasets**: FLChain (7,874), SUPPORT2 (9,105) - Best for robust evaluation
+- **Medium datasets**: GBSG2 (686), WHAS500 (500), Rossi (432), Lung (228), Cancer (228)
+- **Small datasets**: Breast Cancer (198), Veterans (137) - Quick testing
+
 ### Statistical Analysis
-Each benchmark uses different random seeds for proper statistical analysis:
-- **Seed variation**: Different seeds (42, 1042, 2042, etc.) for each run
-- **Confidence intervals**: 95% CI calculated using percentiles
-- **Fixed figure dimensions**: 15x12 inches, 300 DPI for consistent plots
-- **Results saved**: JSON files with statistics and individual run data
+Each benchmark provides professional statistical analysis:
+- **Multi-run support**: Mean ± standard deviation across independent runs
+- **Comprehensive metrics**: Harrell C-index, Uno C-index, AUC, Brier Score
+- **Rich visualizations**: 6-panel analysis plots with fixed dimensions
+- **Professional output**: JSON + CSV + PNG files with timestamps
 
 ## Key Findings
 
