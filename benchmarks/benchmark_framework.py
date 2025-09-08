@@ -144,13 +144,14 @@ class BenchmarkTrainer:
         """Create standard model architecture."""
         return torch.nn.Sequential(
             torch.nn.BatchNorm1d(num_features),
-            torch.nn.Linear(num_features, 32),
-            torch.nn.ReLU(),
-            torch.nn.Dropout(0.2),
-            torch.nn.Linear(32, 64),
+            torch.nn.Linear(num_features, 64),
             torch.nn.ReLU(),
             torch.nn.Dropout(0.2),
             torch.nn.Linear(64, 1),
+            # Modified to single layer
+            # torch.nn.ReLU(),
+            # torch.nn.Dropout(0.2),
+            # torch.nn.Linear(64, 1),
         ).to(self.device)
     
     def train_model(self, 
@@ -161,7 +162,7 @@ class BenchmarkTrainer:
         """Train model with specified loss type."""
         print(f"\n=== Training {loss_type.upper()} ===")
         
-        optimizer = torch.optim.Adam(model.parameters(), lr=self.learning_rate)
+        optimizer = torch.optim.AdamW(model.parameters(), lr=self.learning_rate)
         train_losses = []
         val_losses = []
         
