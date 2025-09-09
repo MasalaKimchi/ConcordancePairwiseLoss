@@ -62,6 +62,7 @@ DATASET_CONFIGS = {
     'breast_cancer': DatasetConfig('Breast Cancer', 1825.0, 'days'),  # 5 years
     'support2': DatasetConfig('SUPPORT2', 180.0, 'days'), # 6 months (critically ill patients)
     'cancer': DatasetConfig('Cancer', 365.0, 'days'),     # 1 year (general cancer dataset)
+    'metabric': DatasetConfig('METABRIC', 200.0, 'days'), # ~6.5 months (breast cancer genomics)
 }
 
 
@@ -195,10 +196,10 @@ class BenchmarkTrainer:
         """Create optimized model architecture with torch.compile for GPU acceleration."""
         model = torch.nn.Sequential(
             torch.nn.BatchNorm1d(num_features),
-            torch.nn.Linear(num_features, 64),
+            torch.nn.Linear(num_features, 128),
             torch.nn.ReLU(),
             torch.nn.Dropout(0.2),
-            torch.nn.Linear(64, 1),
+            torch.nn.Linear(128, 1),
         ).to(self.device)
         
         # Note: torch.compile requires triton for optimal performance on Windows
@@ -293,8 +294,10 @@ class BenchmarkTrainer:
                 # Use mixed precision backward pass
                 if self.use_mixed_precision:
                     self.scaler.scale(total_loss).backward()
-                    self.scaler.step(optimizer)
-                    self.scaler.update()
+                    # Check if gradients exist before stepping
+                    if any(p.grad is not None for p in model.parameters()):
+                        self.scaler.step(optimizer)
+                        self.scaler.update()
                 else:
                     total_loss.backward()
                     optimizer.step()
@@ -361,23 +364,23 @@ class ResultsLogger:
         self.base_filename = f"{dataset_name}_benchmark_{self.timestamp}"
     
     def save_results(self, results: Dict[str, Dict], run_info: Dict = None, execution_time: float = None) -> Dict[str, str]:
-        """Save streamlined results - only comprehensive JSON and summary CSV."""
+        """Save results with individual run metrics in JSON and separate CSV for losses."""
         saved_files = {}
         
-        # 1. Save single comprehensive JSON file with everything
+        # 1. Save comprehensive JSON file with all individual run metrics
         comprehensive_json = os.path.join(self.output_dir, f"{self.base_filename}_comprehensive.json")
         self._save_comprehensive_json(results, comprehensive_json, run_info, execution_time)
         saved_files['comprehensive'] = comprehensive_json
         
-        # 2. Save summary CSV table (nice to have for quick analysis)
-        csv_file = os.path.join(self.output_dir, f"{self.base_filename}_summary.csv")
-        self._save_csv_summary(results, csv_file)
-        saved_files['summary'] = csv_file
+        # 2. Save training and validation losses as separate CSV
+        losses_csv = os.path.join(self.output_dir, f"{self.base_filename}_losses.csv")
+        self._save_losses_csv(results, losses_csv)
+        saved_files['losses'] = losses_csv
         
         return saved_files
     
     def _save_comprehensive_json(self, results: Dict[str, Dict], filepath: str, run_info: Dict = None, execution_time: float = None):
-        """Save single comprehensive JSON file with all experiment data."""
+        """Save comprehensive JSON file with all individual run metrics for statistical analysis."""
         output_data = {
             'experiment_summary': {
                 'dataset': self.dataset_name,
@@ -389,7 +392,7 @@ class ResultsLogger:
             },
             'performance_summary': {},
             'improvement_analysis': {},
-            'detailed_results': {},
+            'individual_runs': {},
             'hyperparameters': run_info or {},
             'system_info': {
                 'python_version': f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
@@ -400,10 +403,10 @@ class ResultsLogger:
         # Performance summary table
         method_names = {
             'nll': 'NLL',
-            'pairwise': 'Pairwise',
-            'pairwise_ipcw': 'Pairwise_IPCW',
-            'normalized_combination': 'Normalized_Combo',
-            'normalized_combination_ipcw': 'Normalized_IPCW'
+            'pairwise': 'CPL',
+            'pairwise_ipcw': 'CPL (ipcw)',
+            'normalized_combination': 'NLL+CPL',
+            'normalized_combination_ipcw': 'NLL+CPL (ipcw)'
         }
         
         for method, result in results.items():
@@ -446,20 +449,81 @@ class ResultsLogger:
                     'brier_improvement_percent': round(brier_imp, 2) if brier_imp is not None else None
                 }
         
-        # Detailed results (same as before)
-        for method, result in results.items():
-            output_data['detailed_results'][method] = {
-                'evaluation': {k: float(v) if hasattr(v, 'item') else v 
-                             for k, v in result['evaluation'].items()},
-                'training': {
-                    'train_losses': [float(x) for x in result['training']['train_losses']],
-                    'val_losses': [float(x) for x in result['training']['val_losses']],
-                    'weight_evolution': result['training']['weight_evolution']
+        # Individual runs data for statistical analysis
+        if 'run_details' in results.get('nll', {}).get('evaluation', {}):
+            # Multiple runs case - extract individual run data
+            num_runs = results['nll']['evaluation']['run_details']['num_runs']
+            individual_runs = results['nll']['evaluation']['run_details']['individual_runs']
+            
+            for run_idx in range(num_runs):
+                run_data = {}
+                for method, result in individual_runs[run_idx].items():
+                    run_data[method] = {
+                        'evaluation': {k: float(v) if hasattr(v, 'item') else v 
+                                     for k, v in result['evaluation'].items()}
+                    }
+                output_data['individual_runs'][f'run_{run_idx + 1}'] = run_data
+        else:
+            # Single run case - store as individual run
+            run_data = {}
+            for method, result in results.items():
+                run_data[method] = {
+                    'evaluation': {k: float(v) if hasattr(v, 'item') else v 
+                                 for k, v in result['evaluation'].items()}
                 }
-            }
+            output_data['individual_runs']['run_1'] = run_data
         
         with open(filepath, 'w') as f:
             json.dump(output_data, f, indent=2)
+    
+    def _save_losses_csv(self, results: Dict[str, Dict], filepath: str):
+        """Save training and validation losses as CSV for easy analysis."""
+        method_names = {
+            'nll': 'NLL',
+            'pairwise': 'CPL',
+            'pairwise_ipcw': 'CPL (ipcw)',
+            'normalized_combination': 'NLL+CPL',
+            'normalized_combination_ipcw': 'NLL+CPL (ipcw)'
+        }
+        
+        rows = []
+        
+        # Check if we have multiple runs
+        if 'run_details' in results.get('nll', {}).get('evaluation', {}):
+            # Multiple runs case
+            individual_runs = results['nll']['evaluation']['run_details']['individual_runs']
+            for run_idx, run_data in enumerate(individual_runs):
+                for method, result in run_data.items():
+                    method_name = method_names.get(method, method)
+                    train_losses = result['training']['train_losses']
+                    val_losses = result['training']['val_losses']
+                    
+                    for epoch, (train_loss, val_loss) in enumerate(zip(train_losses, val_losses)):
+                        rows.append({
+                            'run': run_idx + 1,
+                            'method': method_name,
+                            'epoch': epoch + 1,
+                            'train_loss': float(train_loss),
+                            'val_loss': float(val_loss)
+                        })
+        else:
+            # Single run case
+            for method, result in results.items():
+                method_name = method_names.get(method, method)
+                train_losses = result['training']['train_losses']
+                val_losses = result['training']['val_losses']
+                
+                for epoch, (train_loss, val_loss) in enumerate(zip(train_losses, val_losses)):
+                    rows.append({
+                        'run': 1,
+                        'method': method_name,
+                        'epoch': epoch + 1,
+                        'train_loss': float(train_loss),
+                        'val_loss': float(val_loss)
+                    })
+        
+        df = pd.DataFrame(rows)
+        df.to_csv(filepath, index=False)
     
     def _save_json_results(self, results: Dict[str, Dict], filepath: str, run_info: Dict = None):
         """Save complete results as JSON."""
@@ -492,10 +556,10 @@ class ResultsLogger:
         """Save summary metrics as CSV."""
         method_names = {
             'nll': 'NLL',
-            'pairwise': 'Pairwise',
-            'pairwise_ipcw': 'Pairwise_IPCW',
-            'normalized_combination': 'Normalized_Combo',
-            'normalized_combination_ipcw': 'Normalized_IPCW'
+            'pairwise': 'CPL',
+            'pairwise_ipcw': 'CPL (ipcw)',
+            'normalized_combination': 'NLL+CPL',
+            'normalized_combination_ipcw': 'NLL+CPL (ipcw)'
         }
         
         rows = []
@@ -517,10 +581,10 @@ class ResultsLogger:
     def _save_improvement_analysis(self, results: Dict[str, Dict], filepath: str):
         """Save improvement analysis as CSV."""
         method_names = {
-            'pairwise': 'Pairwise',
-            'pairwise_ipcw': 'Pairwise_IPCW',
-            'normalized_combination': 'Normalized_Combo',
-            'normalized_combination_ipcw': 'Normalized_IPCW'
+            'pairwise': 'CPL',
+            'pairwise_ipcw': 'CPL (ipcw)',
+            'normalized_combination': 'NLL+CPL',
+            'normalized_combination_ipcw': 'NLL+CPL (ipcw)'
         }
         
         # Get NLL baseline
@@ -574,10 +638,10 @@ class ResultsLogger:
             'run_parameters': run_info or {},
             'methods_compared': [
                 'NLL (Negative Partial Log-Likelihood)',
-                'Pairwise (ConcordancePairwiseLoss without IPCW)',
-                'Pairwise_IPCW (ConcordancePairwiseLoss with IPCW)',
-                'Normalized_Combo (NormalizedLossCombination without IPCW)',
-                'Normalized_IPCW (NormalizedLossCombination with IPCW)'
+                'CPL (ConcordancePairwiseLoss without IPCW)',
+                'CPL (ipcw) (ConcordancePairwiseLoss with IPCW)',
+                'NLL+CPL (NormalizedLossCombination without IPCW)',
+                'NLL+CPL (ipcw) (NormalizedLossCombination with IPCW)'
             ],
             'metrics_evaluated': [
                 'Harrell C-index (traditional concordance)',
@@ -612,10 +676,10 @@ class BenchmarkVisualizer:
         # Method name mapping for display
         method_names = {
             'nll': 'NLL',
-            'pairwise': 'Pairwise',
-            'pairwise_ipcw': 'Pairwise + IPCW',
-            'normalized_combination': 'Normalized Combo',
-            'normalized_combination_ipcw': 'Normalized + IPCW'
+            'pairwise': 'CPL',
+            'pairwise_ipcw': 'CPL (ipcw)',
+            'normalized_combination': 'NLL+CPL',
+            'normalized_combination_ipcw': 'NLL+CPL (ipcw)'
         }
         
         # Get NLL baseline for comparison
@@ -716,7 +780,7 @@ class BenchmarkVisualizer:
     
     def _plot_concordance_comparison(self, ax, results):
         """Plot Harrell vs Uno C-index comparison."""
-        method_names = ['NLL', 'Pairwise', 'Pairwise+IPCW', 'Combo', 'Combo+IPCW']
+        method_names = ['NLL', 'CPL', 'CPL (ipcw)', 'NLL+CPL', 'NLL+CPL (ipcw)']
         methods = ['nll', 'pairwise', 'pairwise_ipcw', 'normalized_combination', 'normalized_combination_ipcw']
         
         harrell_scores = [results[method]['evaluation']['harrell_cindex'] for method in methods]
@@ -746,7 +810,7 @@ class BenchmarkVisualizer:
     
     def _plot_all_metrics_comparison(self, ax, results):
         """Plot all metrics (Harrell, Uno, Cumulative AUC, Incident AUC, Brier) for all methods."""
-        method_names = ['NLL', 'Pairwise', 'Pairwise+IPCW', 'Combo', 'Combo+IPCW']
+        method_names = ['NLL', 'CPL', 'CPL (ipcw)', 'NLL+CPL', 'NLL+CPL (ipcw)']
         methods = ['nll', 'pairwise', 'pairwise_ipcw', 'normalized_combination', 'normalized_combination_ipcw']
         
         # Normalize all metrics to [0,1] for comparison
@@ -787,7 +851,7 @@ class BenchmarkVisualizer:
         """Plot the effect of IPCW on pairwise and combination methods."""
         methods_without_ipcw = ['pairwise', 'normalized_combination']
         methods_with_ipcw = ['pairwise_ipcw', 'normalized_combination_ipcw']
-        method_labels = ['Pairwise', 'Normalized Combo']
+        method_labels = ['CPL', 'NLL+CPL']
         
         uno_without = [results[method]['evaluation']['uno_cindex'] for method in methods_without_ipcw]
         uno_with = [results[method]['evaluation']['uno_cindex'] for method in methods_with_ipcw]
@@ -851,7 +915,7 @@ class BenchmarkVisualizer:
                 linestyle = '-' if 'ipcw' not in method_key else '--'
                 ax.plot(nll_weights, label=f'NLL Weight ({method_name})', 
                        alpha=0.8, linewidth=2, linestyle=linestyle, color='blue')
-                ax.plot(pairwise_weights, label=f'Pairwise Weight ({method_name})', 
+                ax.plot(pairwise_weights, label=f'CPL Weight ({method_name})', 
                        alpha=0.8, linewidth=2, linestyle=linestyle, color='orange')
                 has_weights = True
         
@@ -869,7 +933,7 @@ class BenchmarkVisualizer:
     def _plot_comprehensive_improvement(self, ax, results):
         """Plot comprehensive improvement over NLL baseline."""
         methods = ['pairwise', 'pairwise_ipcw', 'normalized_combination', 'normalized_combination_ipcw']
-        method_names = ['Pairwise', 'Pairwise+IPCW', 'Combo', 'Combo+IPCW']
+        method_names = ['CPL', 'CPL (ipcw)', 'NLL+CPL', 'NLL+CPL (ipcw)']
         
         # Get baseline
         nll_harrell = results['nll']['evaluation']['harrell_cindex']
@@ -1029,10 +1093,10 @@ class BenchmarkRunner:
             # Define loss types to compare (including IPCW variants)
             loss_types = [
                 'nll',                              # NLL without IPCW
-                'pairwise',                         # Pairwise without IPCW
-                'pairwise_ipcw',                    # Pairwise with IPCW
-                'normalized_combination',           # Normalized combination without IPCW
-                'normalized_combination_ipcw'       # Normalized combination with IPCW
+                'pairwise',                         # CPL without IPCW
+                'pairwise_ipcw',                    # CPL with IPCW
+                'normalized_combination',           # NLL+CPL without IPCW
+                'normalized_combination_ipcw'       # NLL+CPL with IPCW
             ]
             
             run_results = {}
@@ -1109,12 +1173,17 @@ class BenchmarkRunner:
             print("RESULTS SAVED TO FILES")
             print(f"{'='*80}")
             for file_type, filepath in saved_files.items():
-                print(f"{file_type.upper()}: {filepath}")
+                if file_type == 'comprehensive':
+                    print(f"COMPREHENSIVE JSON (with individual run metrics): {filepath}")
+                elif file_type == 'losses':
+                    print(f"TRAINING/VALIDATION LOSSES CSV: {filepath}")
+                else:
+                    print(f"{file_type.upper()}: {filepath}")
         
         return final_results
     
     def _aggregate_multiple_runs(self, all_runs: List[Dict[str, Dict]]) -> Dict[str, Dict]:
-        """Aggregate results from multiple runs (mean and std)."""
+        """Aggregate results from multiple runs (mean and std) while preserving individual run data."""
         aggregated = {}
         loss_types = all_runs[0].keys()
         
@@ -1141,11 +1210,11 @@ class BenchmarkRunner:
                     'incident_auc': np.mean(incident_auc_scores),
                     'incident_auc_std': np.std(incident_auc_scores),
                     'brier_score': np.mean(brier_scores) if brier_scores else float('nan'),
-                    'brier_score_std': np.std(brier_scores) if brier_scores else float('nan')
-                },
-                'run_details': {
-                    'num_runs': len(all_runs),
-                    'individual_runs': all_runs
+                    'brier_score_std': np.std(brier_scores) if brier_scores else float('nan'),
+                    'run_details': {
+                        'num_runs': len(all_runs),
+                        'individual_runs': all_runs
+                    }
                 }
             }
         

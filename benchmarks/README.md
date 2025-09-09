@@ -4,7 +4,7 @@ A comprehensive collection of survival analysis benchmarks for evaluating the Co
 
 ## 🎯 Overview
 
-This benchmark suite provides **9 diverse survival analysis datasets** for robust evaluation of your ConcordancePairwiseLoss function. Each benchmark compares 5 different loss functions across 4 key survival analysis metrics, with comprehensive statistical analysis and visualization.
+This benchmark suite provides **10 diverse survival analysis datasets** for robust evaluation of your ConcordancePairwiseLoss function. Each benchmark compares 5 different loss functions across 4 key survival analysis metrics, with comprehensive statistical analysis and visualization.
 
 ### Loss Functions Compared
 - **NLL**: Negative Partial Log-Likelihood (Cox regression baseline)
@@ -38,12 +38,12 @@ This benchmark suite provides **9 diverse survival analysis datasets** for robus
 | **Lung** | `lung_benchmark.py` | Lung cancer survival data | 228 | ~72% | 1 year | Cancer |
 | **Cancer** | `cancer_benchmark.py` | General cancer survival dataset | 228 | ~72% | 1 year | Cancer |
 
-### Small Datasets (<200 samples) - Quick Testing
+### Large Datasets (1000+ samples) - High Statistical Power
 
 | Dataset | File | Description | Size | Event Rate | AUC Time | Domain |
 |---------|------|-------------|------|------------|----------|---------|
-| **Breast Cancer** | `breast_cancer_benchmark.py` | Breast cancer survival (high-dimensional) | 198 | ~25% | 5 years | Cancer |
-| **Veterans** | `veterans_benchmark.py` | Veterans lung cancer trial | 137 | ~93% | 1 year | Cancer |
+| **METABRIC** | `metabric_benchmark.py` | Breast cancer genomics dataset | 1,980 | ~45% | 5 years | Cancer Genomics |
+
 
 ## 🚀 Quick Start
 
@@ -56,6 +56,9 @@ pip install matplotlib seaborn pandas numpy
 
 # For SurvSet datasets (SUPPORT2, Cancer)
 pip install SurvSet
+
+# For pycox datasets (Rossi, METABRIC)
+pip install pycox
 ```
 
 ### Running Benchmarks
@@ -121,10 +124,10 @@ class CustomDataLoader(AbstractDataLoader):
 
 ### Data Sources
 
-- **scikit-survival**: FLChain, WHAS500, Veterans, Breast Cancer
+- **scikit-survival**: FLChain, WHAS500, Breast Cancer
 - **SurvSet**: SUPPORT2, Cancer  
 - **lifelines**: GBSG2, Lung
-- **pycox**: Rossi
+- **pycox**: Rossi, METABRIC
 
 ## 📊 Output and Results
 
@@ -214,8 +217,8 @@ python support2_benchmark.py --runs 3 --epochs 50
 
 ### For Comprehensive Evaluation
 ```bash
-# All 9 datasets for complete evaluation
-datasets=("flchain" "support2" "gbsg2" "whas500" "veterans" "breast_cancer" "cancer" "lung" "rossi")
+# All 10 datasets for complete evaluation
+datasets=("flchain" "support2" "gbsg2" "whas500" "veterans" "breast_cancer" "cancer" "lung" "rossi" "metabric")
 for dataset in "${datasets[@]}"; do
     echo "Running ${dataset} benchmark..."
     python ${dataset}_benchmark.py --runs 3 --epochs 75 --output-dir comprehensive_results
@@ -253,6 +256,13 @@ done
 - **High-dimensional**: Good for testing feature handling
 - **Genomic data**: Different from clinical variables
 - **Moderate improvements**: 32% Harrell C-index gains
+
+### METABRIC (Genomics and Clinical Integration)
+- **1,980 samples**: Large breast cancer genomics dataset
+- **Mixed features**: Clinical variables + molecular subtypes + gene expression
+- **Genomics domain**: Tests performance on high-dimensional genomic data
+- **Real-world complexity**: Combines clinical and molecular features
+- **Balanced evaluation**: Good event rate (~45%) for robust assessment
 
 ## ⚠️ Known Limitations
 
@@ -306,8 +316,8 @@ Pairwise                 0.6891±0.0145     0.6823±0.0134   0.7234±0.0187   0.
 ## 🎉 Success Metrics
 
 ### Benchmark Suite Achievements
-✅ **9 diverse datasets** across multiple medical domains  
-✅ **3 different data sources** (scikit-survival, SurvSet, lifelines)  
+✅ **10 diverse datasets** across multiple medical domains  
+✅ **4 different data sources** (scikit-survival, SurvSet, lifelines, pycox)  
 ✅ **Consistent framework** with shared components and patterns  
 ✅ **Comprehensive evaluation** with 4 metrics × 5 loss functions  
 ✅ **Statistical robustness** with multi-run support  
@@ -342,7 +352,7 @@ self.batch_size = 32  # or 16 for very large datasets
 ### Batch Processing
 ```bash
 # Run all datasets with multiple runs
-datasets=("flchain" "support2" "gbsg2" "whas500" "veterans" "breast_cancer" "cancer" "lung" "rossi")
+datasets=("flchain" "support2" "gbsg2" "whas500" "veterans" "breast_cancer" "cancer" "lung" "rossi" "metabric")
 for dataset in "${datasets[@]}"; do
     echo "Running ${dataset} benchmark..."
     python ${dataset}_benchmark.py --runs 5 --epochs 100 --output-dir publication_results &

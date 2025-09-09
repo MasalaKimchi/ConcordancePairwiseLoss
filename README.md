@@ -6,7 +6,7 @@ A pairwise loss function for survival analysis that improves concordance between
 
 ### Installation
 ```bash
-pip install torch torchsurv lifelines scikit-learn pandas numpy matplotlib seaborn
+pip install torch torchsurv lifelines scikit-survival SurvSet pycox scikit-learn pandas numpy matplotlib seaborn
 ```
 
 ### Basic Usage
@@ -62,7 +62,7 @@ python benchmarks/whas500_benchmark.py --runs 5 --epochs 100
 
 ### Available Datasets
 - **Large datasets**: FLChain (7,874), SUPPORT2 (9,105) - Best for robust evaluation
-- **Medium datasets**: GBSG2 (686), WHAS500 (500), Rossi (432), Lung (228), Cancer (228)
+- **Medium datasets**: GBSG2 (686), WHAS500 (500), Rossi (432), Lung (228), Cancer (228), METABRIC (1,980) - Good balance
 - **Small datasets**: Breast Cancer (198), Veterans (137) - Quick testing
 
 ### Statistical Analysis
@@ -99,6 +99,7 @@ ConcordancePairwiseLoss/
 │   ├── breast_cancer_benchmark.py  # Breast cancer dataset benchmark
 │   ├── support2_benchmark.py       # SUPPORT2 critical care benchmark
 │   ├── cancer_benchmark.py         # General cancer dataset benchmark
+│   ├── metabric_benchmark.py       # METABRIC breast cancer genomics benchmark
 │   └── README.md                   # Comprehensive benchmark documentation
 └── README.md                      # This file
 ```
