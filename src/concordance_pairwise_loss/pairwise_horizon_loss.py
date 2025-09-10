@@ -11,6 +11,13 @@ class ConcordancePairwiseHorizonLoss(nn.Module):
     ``horizon_kind`` is not ``"none"`` the training split median follow-up
     time (in years) must be registered via :meth:`set_train_stats` before the
     loss is used for training or evaluation.
+    
+    The horizon weighting functions are:
+    - "exp": exponential decay exp(-Δt / h)
+    - "gauss": Gaussian kernel exp(-Δt² / (2h²)) where h is the standard deviation
+    - "tri": triangular kernel max(0, 1 - Δt / (3h))
+    
+    where Δt is the time gap between pairs and h = median_followup * rel_factor.
     """
 
     def __init__(
@@ -71,7 +78,7 @@ class ConcordancePairwiseHorizonLoss(nn.Module):
         time_diff = times.unsqueeze(1) - times.unsqueeze(0)  # (n, n)
         comparable = (time_diff < 0) & events.unsqueeze(1).expand(-1, n)
         not_diag = ~torch.eye(n, dtype=torch.bool, device=device)
-        comparable = comparable & not_diag & (time_diff != 0)
+        comparable = comparable & not_diag
 
         if not torch.any(comparable):
             # Maintain gradient flow when no pairs exist
