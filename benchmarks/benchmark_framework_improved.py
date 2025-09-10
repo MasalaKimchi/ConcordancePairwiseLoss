@@ -8,7 +8,7 @@ import time as time_module
 import json
 import csv
 import os
-import sys
+
 from typing import Dict, List, Tuple, Optional
 
 import numpy as np
@@ -22,34 +22,13 @@ from torchsurv.stats.ipcw import get_ipcw
 
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'src'))
 from concordance_pairwise_loss import ConcordancePairwiseLoss, NormalizedLossCombination
+from dataset_configs import DatasetConfig, load_dataset_configs
+from abstract_data_loader import AbstractDataLoader
+
 from concordance_pairwise_loss.pairwise_horizon_loss import ConcordancePairwiseHorizonLoss
 from concordance_pairwise_loss.uncertainty_combined_loss import UncertaintyWeightedCombination
+DATASET_CONFIGS = load_dataset_configs()
 
-
-class DatasetConfig:
-    def __init__(self, name: str, auc_time: float, auc_time_unit: str = "days"):
-        self.name = name
-        self.auc_time = auc_time
-        self.auc_time_unit = auc_time_unit
-
-
-DATASET_CONFIGS = {
-    'gbsg2': DatasetConfig('GBSG2', 1825.0, 'days'),
-    'lung': DatasetConfig('Lung', 365.0, 'days'),
-    'rossi': DatasetConfig('Rossi', 365.0, 'days'),
-    'flchain': DatasetConfig('FLChain', 1825.0, 'days'),
-    'whas500': DatasetConfig('WHAS500', 365.0, 'days'),
-    'veterans': DatasetConfig('Veterans', 365.0, 'days'),
-    'breast_cancer': DatasetConfig('Breast Cancer', 1825.0, 'days'),
-    'support2': DatasetConfig('SUPPORT2', 180.0, 'days'),
-    'cancer': DatasetConfig('Cancer', 365.0, 'days'),
-    'metabric': DatasetConfig('METABRIC', 200.0, 'days'),
-}
-
-
-class AbstractDataLoader:
-    def load_data(self) -> Tuple[DataLoader, DataLoader, DataLoader, int]:
-        raise NotImplementedError
 
 
 class BenchmarkEvaluator:

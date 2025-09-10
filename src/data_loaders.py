@@ -12,9 +12,10 @@ from sklearn.preprocessing import LabelEncoder, StandardScaler
 from torch.utils.data import DataLoader
 
 from flexible_dataset import FlexibleDataset, Custom_dataset
+from abstract_data_loader import AbstractDataLoader
 
 
-class GBSG2DataLoader:
+class GBSG2DataLoader(AbstractDataLoader):
     """GBSG2 dataset loader implementation."""
 
     def __init__(self, batch_size: int = 64):
@@ -40,7 +41,7 @@ class GBSG2DataLoader:
         return dataloader_train, dataloader_val, dataloader_test, num_features
 
 
-class FLChainDataLoader:
+class FLChainDataLoader(AbstractDataLoader):
     """FLChain dataset loader implementation."""
 
     def __init__(self, batch_size: int = 64):
@@ -82,7 +83,7 @@ class FLChainDataLoader:
         return dataloader_train, dataloader_val, dataloader_test, num_features
 
 
-class LungDataLoader:
+class LungDataLoader(AbstractDataLoader):
     """Lung dataset loader implementation."""
 
     def __init__(self, batch_size: int = 32):
@@ -111,7 +112,7 @@ class LungDataLoader:
         return dataloader_train, dataloader_val, dataloader_test, num_features
 
 
-class RossiDataLoader:
+class RossiDataLoader(AbstractDataLoader):
     """Rossi dataset loader implementation."""
 
     def __init__(self, batch_size: int = 32):
@@ -138,7 +139,7 @@ class RossiDataLoader:
         return dataloader_train, dataloader_val, dataloader_test, num_features
 
 
-class WHAS500DataLoader:
+class WHAS500DataLoader(AbstractDataLoader):
     """WHAS500 dataset loader implementation."""
 
     def __init__(self, batch_size: int = 32):
@@ -169,7 +170,7 @@ class WHAS500DataLoader:
         return dataloader_train, dataloader_val, dataloader_test, num_features
 
 
-class CancerDataLoader:
+class CancerDataLoader(AbstractDataLoader):
     """Cancer dataset loader implementation from SurvSet."""
 
     def __init__(self, batch_size: int = 64):
@@ -216,7 +217,7 @@ class CancerDataLoader:
         return dataloader_train, dataloader_val, dataloader_test, num_features
 
 
-class SUPPORT2DataLoader:
+class SUPPORT2DataLoader(AbstractDataLoader):
     """SUPPORT2 dataset loader implementation."""
 
     def __init__(self, batch_size: int = 64):
@@ -266,7 +267,7 @@ class SUPPORT2DataLoader:
         return dataloader_train, dataloader_val, dataloader_test, num_features
 
 
-class METABRICDataLoader:
+class METABRICDataLoader(AbstractDataLoader):
     """METABRIC dataset loader implementation using pycox."""
 
     def __init__(self, batch_size: int = 64):
