@@ -27,6 +27,7 @@ This benchmark suite provides **10 diverse survival analysis datasets** for robu
 |---------|------|-------------|------|------------|----------|---------|
 | **FLChain** | `flchain_benchmark.py` | Serum free light chain measurements | 7,874 | ~27% | 5 years | Medical |
 | **SUPPORT2** | `support2_benchmark.py` | Critically ill hospitalized adults | 9,105 | ~68% | 6 months | Critical Care |
+| **METABRIC** | `metabric_benchmark.py` | Breast cancer genomics dataset | 1,980 | ~45% | 5 years | Cancer Genomics |
 
 ### Medium Datasets (200-1000 samples) - Good Balance
 
@@ -37,12 +38,6 @@ This benchmark suite provides **10 diverse survival analysis datasets** for robu
 | **Rossi** | `rossi_benchmark.py` | Recidivism data (criminal justice) | 432 | ~38% | 1 year | Non-medical |
 | **Lung** | `lung_benchmark.py` | Lung cancer survival data | 228 | ~72% | 1 year | Cancer |
 | **Cancer** | `cancer_benchmark.py` | General cancer survival dataset | 228 | ~72% | 1 year | Cancer |
-
-### Large Datasets (1000+ samples) - High Statistical Power
-
-| Dataset | File | Description | Size | Event Rate | AUC Time | Domain |
-|---------|------|-------------|------|------------|----------|---------|
-| **METABRIC** | `metabric_benchmark.py` | Breast cancer genomics dataset | 1,980 | ~45% | 5 years | Cancer Genomics |
 
 
 ## 🚀 Quick Start
