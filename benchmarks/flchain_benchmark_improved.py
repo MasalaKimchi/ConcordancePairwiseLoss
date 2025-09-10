@@ -13,18 +13,12 @@ Uses horizon_kind="exp", hetero_tau=True, and use_uncertainty_weighting=True
 import warnings
 warnings.filterwarnings("ignore")
 
-import pandas as pd
 import numpy as np
 import torch
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import StandardScaler, LabelEncoder
-from torch.utils.data import DataLoader
-from typing import Tuple, List, Optional
 
 # Import improved framework components
 from benchmark_framework_improved import (
-    BenchmarkRunnerImproved, 
-    AbstractDataLoader, 
+    BenchmarkRunnerImproved,
     DATASET_CONFIGS
 )
 
@@ -32,110 +26,7 @@ from benchmark_framework_improved import (
 import sys
 import os
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'src'))
-from flexible_dataset import FlexibleDataset
-
-
-class FLChainDataLoader(AbstractDataLoader):
-    """FLChain dataset loader implementation."""
-    
-    def __init__(self, batch_size: int = 64):
-        self.batch_size = batch_size
-    
-    def load_data(self) -> Tuple[DataLoader, DataLoader, DataLoader, int]:
-        """Load FLChain dataset and return dataloaders."""
-        from sksurv.datasets import load_flchain
-        
-        # Load dataset
-        X, y = load_flchain()
-        
-        # Convert structured array to DataFrame
-        df = pd.DataFrame(X)
-        
-        # Extract time and event from structured array
-        df['time'] = y['futime']
-        df['event'] = y['death'].astype(int)
-        
-        # Ensure proper 0/1 encoding for events
-        if df['event'].min() != 0 or df['event'].max() != 1:
-            # Convert to binary encoding if needed
-            df['event'] = (df['event'] > 0).astype(int)
-        
-        # Handle missing values
-        # For numerical columns, fill with median
-        numerical_cols = df.select_dtypes(include=[np.number]).columns
-        for col in numerical_cols:
-            if col not in ['time', 'event']:
-                df[col] = df[col].fillna(df[col].median())
-        
-        # For categorical columns, fill with mode and encode
-        # Include both 'object' and 'category' dtypes
-        categorical_cols = df.select_dtypes(include=['object', 'category']).columns
-        label_encoders = {}
-        
-        for col in categorical_cols:
-            if col not in ['time', 'event']:
-                # Fill missing values with mode
-                mode_value = df[col].mode()
-                if len(mode_value) > 0:
-                    df[col] = df[col].fillna(mode_value[0])
-                else:
-                    df[col] = df[col].fillna('unknown')
-                
-                # Label encode categorical variables
-                le = LabelEncoder()
-                df[col] = le.fit_transform(df[col].astype(str))
-                label_encoders[col] = le
-        
-        # Remove any remaining rows with missing values
-        df = df.dropna()
-        
-        # Ensure all columns except time and event are numeric
-        feature_cols = [col for col in df.columns if col not in ['time', 'event']]
-        for col in feature_cols:
-            if df[col].dtype == 'object':
-                df[col] = pd.to_numeric(df[col], errors='coerce')
-        
-        # Remove any rows with NaN values introduced by conversion
-        df = df.dropna()
-        
-        # Standardize all feature columns (excluding time and event)
-        numerical_feature_cols = [col for col in df.columns if col not in ['time', 'event']]
-        
-        if len(numerical_feature_cols) > 0:
-            scaler = StandardScaler()
-            df[numerical_feature_cols] = scaler.fit_transform(df[numerical_feature_cols])
-        
-        # Train/validation/test split
-        df_train, df_test = train_test_split(df, test_size=0.3, random_state=42, stratify=df['event'])
-        df_train, df_val = train_test_split(df_train, test_size=0.3, random_state=42, stratify=df_train['event'])
-        
-        print(f"Training: {len(df_train)}, Validation: {len(df_val)}, Testing: {len(df_test)}")
-        print(f"Event rate - Train: {df_train['event'].mean():.3f}, Val: {df_val['event'].mean():.3f}, Test: {df_test['event'].mean():.3f}")
-        
-        # Create dataloaders
-        dataloader_train = DataLoader(
-            FlexibleDataset(df_train, time_col='time', event_col='event'), 
-            batch_size=self.batch_size, 
-            shuffle=True
-        )
-        dataloader_val = DataLoader(
-            FlexibleDataset(df_val, time_col='time', event_col='event'), 
-            batch_size=len(df_val), 
-            shuffle=False
-        )
-        dataloader_test = DataLoader(
-            FlexibleDataset(df_test, time_col='time', event_col='event'), 
-            batch_size=len(df_test), 
-            shuffle=False
-        )
-        
-        # Get number of features
-        x, (event, time) = next(iter(dataloader_train))
-        num_features = x.size(1)
-        
-        print(f"Number of features: {num_features}")
-        
-        return dataloader_train, dataloader_val, dataloader_test, num_features
+from datasets.flchain import FLChainDataLoader
 
 
 def main():
