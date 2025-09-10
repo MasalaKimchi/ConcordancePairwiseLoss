@@ -46,24 +46,22 @@ nll_w, pairwise_w = loss_combiner.get_weights_scale_balanced(
 
 ## Running Benchmarks
 
-The comprehensive benchmark suite includes **9 diverse survival analysis datasets** for robust evaluation. See `benchmarks/README.md` for complete documentation.
+Use the unified benchmark framework to evaluate models across available datasets.
 
 ### Quick Start
 ```bash
-# Quick test (3 epochs, no saving)
-python benchmarks/flchain_benchmark.py --epochs 3 --no-save
-
-# Standard evaluation (50 epochs, save results)
-python benchmarks/gbsg2_benchmark.py
-
-# Multiple runs for statistical robustness
-python benchmarks/whas500_benchmark.py --runs 5 --epochs 100
+python benchmarks/benchmark_framework_improved.py --dataset gbsg2 --loss-type nll --epochs 3
 ```
 
+### Adding a New Dataset
+1. Implement a loader inheriting from `AbstractDataLoader` in `src/data_loaders.py` and register it in `DATA_LOADERS`.
+2. Add the dataset's AUC horizon and time units to `benchmarks/dataset_configs.json`.
+3. Run the benchmark with `--dataset <name>`.
+
 ### Available Datasets
-- **Large datasets**: FLChain (7,874), SUPPORT2 (9,105) - Best for robust evaluation
-- **Medium datasets**: GBSG2 (686), WHAS500 (500), Rossi (432), Lung (228), Cancer (228), METABRIC (1,980) - Good balance
-- **Small datasets**: Breast Cancer (198), Veterans (137) - Quick testing
+- **Large datasets**: FLChain (7,874), SUPPORT2 (9,105)
+- **Medium datasets**: GBSG2 (686), WHAS500 (500), Rossi (432), Lung (228), Cancer (228), METABRIC (1,980)
+- **Small datasets**: Breast Cancer (198), Veterans (137)
 
 ### Statistical Analysis
 Each benchmark provides professional statistical analysis:
@@ -87,20 +85,14 @@ ConcordancePairwiseLoss/
 │   │   ├── __init__.py
 │   │   ├── loss.py               # Main ConcordancePairwiseLoss implementation
 │   │   └── dynamic_weighting.py  # Dynamic weighting strategies
+│   ├── abstract_data_loader.py   # Base class for dataset loaders
+│   ├── data_loaders.py           # Implementations of supported datasets
+│   ├── dataset_configs.py        # Utility for loading dataset metadata
 │   └── flexible_dataset.py       # Dataset utilities
-├── benchmarks/                   # Comprehensive benchmark suite
-│   ├── benchmark_framework.py      # Shared framework and components
-│   ├── gbsg2_benchmark.py          # GBSG2 dataset benchmark
-│   ├── lung_benchmark.py           # Lung cancer dataset benchmark
-│   ├── rossi_benchmark.py          # Rossi recidivism dataset benchmark
-│   ├── flchain_benchmark.py        # FLChain dataset benchmark
-│   ├── whas500_benchmark.py        # WHAS500 cardiac dataset benchmark
-│   ├── veterans_benchmark.py       # Veterans lung cancer benchmark
-│   ├── breast_cancer_benchmark.py  # Breast cancer dataset benchmark
-│   ├── support2_benchmark.py       # SUPPORT2 critical care benchmark
-│   ├── cancer_benchmark.py         # General cancer dataset benchmark
-│   ├── metabric_benchmark.py       # METABRIC breast cancer genomics benchmark
-│   └── README.md                   # Comprehensive benchmark documentation
+├── benchmarks/
+│   ├── benchmark_framework.py      # Legacy benchmark framework
+│   ├── benchmark_framework_improved.py  # Current benchmark framework
+│   └── dataset_configs.json        # Dataset-specific evaluation settings
 └── README.md                      # This file
 ```
 

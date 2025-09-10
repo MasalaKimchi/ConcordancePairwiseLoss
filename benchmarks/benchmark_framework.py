@@ -18,7 +18,6 @@ from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader
 from typing import Dict, List, Tuple, Optional, Callable
 import seaborn as sns
-from abc import ABC, abstractmethod
 import json
 import csv
 from datetime import datetime
@@ -37,43 +36,11 @@ import sys
 import os
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'src'))
 from concordance_pairwise_loss import ConcordancePairwiseLoss, NormalizedLossCombination
+from dataset_configs import DatasetConfig, load_dataset_configs
+from abstract_data_loader import AbstractDataLoader
 
 
-class DatasetConfig:
-    """Configuration for different datasets."""
-    
-    def __init__(self, 
-                 name: str,
-                 auc_time: float,
-                 auc_time_unit: str = "days"):
-        self.name = name
-        self.auc_time = auc_time
-        self.auc_time_unit = auc_time_unit
-
-
-# Predefined dataset configurations
-DATASET_CONFIGS = {
-    'gbsg2': DatasetConfig('GBSG2', 1825.0, 'days'),  # 5 years
-    'lung': DatasetConfig('Lung', 365.0, 'days'),     # 1 year
-    'rossi': DatasetConfig('Rossi', 365.0, 'days'),   # 1 year
-    'flchain': DatasetConfig('FLChain', 1825.0, 'days'),  # 5 years (similar to GBSG2)
-    'whas500': DatasetConfig('WHAS500', 365.0, 'days'),   # 1 year (cardiac event)
-    'veterans': DatasetConfig('Veterans', 365.0, 'days'), # 1 year (lung cancer)
-    'breast_cancer': DatasetConfig('Breast Cancer', 1825.0, 'days'),  # 5 years
-    'support2': DatasetConfig('SUPPORT2', 180.0, 'days'), # 6 months (critically ill patients)
-    'cancer': DatasetConfig('Cancer', 365.0, 'days'),     # 1 year (general cancer dataset)
-    'metabric': DatasetConfig('METABRIC', 200.0, 'days'), # ~6.5 months (breast cancer genomics)
-}
-
-
-class AbstractDataLoader(ABC):
-    """Abstract base class for dataset loaders."""
-    
-    @abstractmethod
-    def load_data(self) -> Tuple[DataLoader, DataLoader, DataLoader, int]:
-        """Load and return train, val, test dataloaders and number of features."""
-        pass
-
+DATASET_CONFIGS = load_dataset_configs()
 
 class BenchmarkEvaluator:
     """Shared evaluation logic for all benchmarks."""
