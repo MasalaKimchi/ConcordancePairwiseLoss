@@ -349,3 +349,41 @@ class BenchmarkRunnerImproved:
         if self.save_results and self.logger:
             self.logger.save_results(results, f"{self.dataset_config.name}_improved")
         return results
+
+
+if __name__ == "__main__":
+    import argparse
+    from data_loaders import DATA_LOADERS
+    parser = argparse.ArgumentParser(description="Run improved survival analysis benchmark")
+    parser.add_argument('--dataset', required=True, choices=DATA_LOADERS.keys(), help='Dataset name')
+    parser.add_argument('--epochs', type=int, default=50, help='Number of training epochs')
+    parser.add_argument('--lr', type=float, default=5e-2, help='Learning rate')
+    parser.add_argument('--no-save', action='store_true', help='Disable saving results to files')
+    parser.add_argument('--output-dir', type=str, default='results', help='Output directory for results')
+    parser.add_argument('--loss-types', nargs='+', default=None, help='Loss types to evaluate')
+    parser.add_argument('--horizon-kind', type=str, default='exp', help='Horizon kind for CPLH losses')
+    parser.add_argument('--hetero-tau', action='store_true', help='Use heterogeneous tau')
+    parser.add_argument('--rel-factor', type=float, default=0.5, help='Relative factor for horizon loss')
+    parser.add_argument('--temperature', type=float, default=1.0, help='Temperature for horizon loss')
+    parser.add_argument('--no-uncertainty-weighting', action='store_true', help='Disable uncertainty weighting')
+    parser.add_argument('--seed', type=int, default=None, help='Random seed')
+    args = parser.parse_args()
+    data_loader_cls = DATA_LOADERS[args.dataset]
+    data_loader = data_loader_cls()
+    dataset_config = DATASET_CONFIGS[args.dataset]
+    runner = BenchmarkRunnerImproved(
+        data_loader=data_loader,
+        dataset_config=dataset_config,
+        batch_size=data_loader.batch_size,
+        epochs=args.epochs,
+        learning_rate=args.lr,
+        output_dir=args.output_dir,
+        save_results=not args.no_save,
+        random_seed=args.seed,
+        horizon_kind=args.horizon_kind,
+        hetero_tau=args.hetero_tau,
+        rel_factor=args.rel_factor,
+        temperature=args.temperature,
+        use_uncertainty_weighting=not args.no_uncertainty_weighting,
+    )
+    runner.run_comparison(loss_types=args.loss_types)

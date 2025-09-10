@@ -1219,3 +1219,31 @@ class BenchmarkRunner:
             }
         
         return aggregated
+
+
+if __name__ == "__main__":
+    import argparse
+    from data_loaders import DATA_LOADERS
+    parser = argparse.ArgumentParser(description="Run survival analysis benchmark")
+    parser.add_argument('--dataset', required=True, choices=DATA_LOADERS.keys(), help='Dataset name')
+    parser.add_argument('--runs', type=int, default=1, help='Number of independent runs')
+    parser.add_argument('--epochs', type=int, default=50, help='Number of training epochs')
+    parser.add_argument('--lr', type=float, default=5e-2, help='Learning rate')
+    parser.add_argument('--no-save', action='store_true', help='Disable saving results to files')
+    parser.add_argument('--output-dir', type=str, default='results', help='Output directory for results')
+    parser.add_argument('--seed', type=int, default=None, help='Random seed for reproducibility')
+    args = parser.parse_args()
+    data_loader_cls = DATA_LOADERS[args.dataset]
+    data_loader = data_loader_cls()
+    dataset_config = DATASET_CONFIGS[args.dataset]
+    runner = BenchmarkRunner(
+        data_loader=data_loader,
+        dataset_config=dataset_config,
+        batch_size=data_loader.batch_size,
+        epochs=args.epochs,
+        learning_rate=args.lr,
+        output_dir=args.output_dir,
+        save_results=not args.no_save,
+        random_seed=args.seed,
+    )
+    runner.run_comparison(num_runs=args.runs)
