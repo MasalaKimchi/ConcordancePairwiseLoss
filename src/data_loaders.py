@@ -13,6 +13,7 @@ from torch.utils.data import DataLoader
 
 from flexible_dataset import FlexibleDataset, Custom_dataset
 from abstract_data_loader import AbstractDataLoader
+from image_dataset import MIMICImageDataset, get_efficientnet_transforms
 
 
 class GBSG2DataLoader(AbstractDataLoader):
@@ -310,6 +311,135 @@ class METABRICDataLoader(AbstractDataLoader):
         return dataloader_train, dataloader_val, dataloader_test, num_features
 
 
+class MIMICDataLoader(AbstractDataLoader):
+    """MIMIC-IV Chest X-ray dataset loader implementation."""
+
+    def __init__(
+        self, 
+        batch_size: int = 128,
+        data_dir: str = "Z:/mimic-cxr-jpg-2.1.0.physionet.org/",
+        csv_path: str = "data/mimic/mimic_cxr_splits.csv",
+        target_size: Tuple[int, int] = (224, 224),
+        use_augmentation: bool = True
+    ):
+        """
+        Initialize MIMIC data loader.
+        
+        Args:
+            batch_size: Batch size for data loaders
+            data_dir: Base directory containing MIMIC data
+            csv_path: Path to preprocessed CSV file
+            target_size: Target image size for EfficientNet-B0
+            use_augmentation: Whether to use data augmentation for training
+        """
+        self.batch_size = batch_size
+        self.data_dir = data_dir
+        self.csv_path = csv_path
+        self.target_size = target_size
+        self.use_augmentation = use_augmentation
+
+    def load_data(self) -> Tuple[DataLoader, DataLoader, DataLoader, int]:
+        """
+        Load MIMIC-IV Chest X-ray dataset.
+        
+        Returns:
+            Tuple of (train_loader, val_loader, test_loader, num_features)
+            For image data, num_features represents the number of channels (3 for RGB)
+        """
+        import pandas as pd
+        
+        # Load preprocessed data
+        if not os.path.exists(self.csv_path):
+            raise FileNotFoundError(
+                f"Preprocessed CSV not found at {self.csv_path}. "
+                "Please run preprocess_mimic.py first to generate the CSV file."
+            )
+        
+        df = pd.read_csv(self.csv_path)
+        
+        # Filter out images that don't exist
+        df = df[df['exists'] == True].copy()
+        
+        # Split data
+        df_train = df[df['split'] == 'train'].copy()
+        df_val = df[df['split'] == 'val'].copy()
+        df_test = df[df['split'] == 'test'].copy()
+        
+        print(f"Dataset sizes - Train: {len(df_train)}, Val: {len(df_val)}, Test: {len(df_test)}")
+        print(f"Event rates - Train: {df_train['event'].mean():.3f}, Val: {df_val['event'].mean():.3f}, Test: {df_test['event'].mean():.3f}")
+        
+        # Create transforms
+        train_transform = get_efficientnet_transforms(
+            target_size=self.target_size,
+            is_training=self.use_augmentation
+        )
+        val_test_transform = get_efficientnet_transforms(
+            target_size=self.target_size,
+            is_training=False
+        )
+        
+        # Create datasets
+        train_dataset = MIMICImageDataset(
+            df_train, 
+            self.data_dir,
+            time_col='tte',
+            event_col='event',
+            path_col='path',
+            transform=train_transform,
+            target_size=self.target_size
+        )
+        
+        val_dataset = MIMICImageDataset(
+            df_val,
+            self.data_dir,
+            time_col='tte',
+            event_col='event',
+            path_col='path',
+            transform=val_test_transform,
+            target_size=self.target_size
+        )
+        
+        test_dataset = MIMICImageDataset(
+            df_test,
+            self.data_dir,
+            time_col='tte',
+            event_col='event',
+            path_col='path',
+            transform=val_test_transform,
+            target_size=self.target_size
+        )
+        
+        # Create data loaders
+        train_loader = DataLoader(
+            train_dataset, 
+            batch_size=self.batch_size, 
+            shuffle=True,
+            num_workers=4,
+            pin_memory=True
+        )
+        
+        val_loader = DataLoader(
+            val_dataset, 
+            batch_size=self.batch_size, 
+            shuffle=False,
+            num_workers=4,
+            pin_memory=True
+        )
+        
+        test_loader = DataLoader(
+            test_dataset, 
+            batch_size=self.batch_size, 
+            shuffle=False,
+            num_workers=4,
+            pin_memory=True
+        )
+        
+        # For image data, num_features represents the number of channels
+        num_features = 3  # RGB channels
+        
+        return train_loader, val_loader, test_loader, num_features
+
+
 DATA_LOADERS = {
     'gbsg2': GBSG2DataLoader,
     'flchain': FLChainDataLoader,
@@ -319,5 +449,6 @@ DATA_LOADERS = {
     'cancer': CancerDataLoader,
     'support2': SUPPORT2DataLoader,
     'metabric': METABRICDataLoader,
+    'mimic': MIMICDataLoader,
 }
 

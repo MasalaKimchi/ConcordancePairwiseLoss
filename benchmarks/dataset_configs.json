@@ -8,5 +8,6 @@
   "breast_cancer": {"name": "Breast Cancer", "auc_time": 1825.0, "auc_time_unit": "days"},
   "support2": {"name": "SUPPORT2", "auc_time": 180.0, "auc_time_unit": "days"},
   "cancer": {"name": "Cancer", "auc_time": 365.0, "auc_time_unit": "days"},
-  "metabric": {"name": "METABRIC", "auc_time": 200.0, "auc_time_unit": "days"}
+  "metabric": {"name": "METABRIC", "auc_time": 200.0, "auc_time_unit": "days"},
+  "mimic": {"name": "MIMIC-IV CXR", "auc_time": 365.0, "auc_time_unit": "days"}
 }
