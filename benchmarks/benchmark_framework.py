@@ -163,10 +163,10 @@ class BenchmarkTrainer:
         """Create optimized model architecture with torch.compile for GPU acceleration."""
         model = torch.nn.Sequential(
             torch.nn.BatchNorm1d(num_features),
-            torch.nn.Linear(num_features, 128),
+            torch.nn.Linear(num_features, 64),
             torch.nn.ReLU(),
             torch.nn.Dropout(0.2),
-            torch.nn.Linear(128, 1),
+            torch.nn.Linear(64, 1),
         ).to(self.device)
         
         # Note: torch.compile requires triton for optimal performance on Windows

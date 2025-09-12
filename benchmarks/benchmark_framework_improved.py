@@ -8,6 +8,10 @@ import time as time_module
 import json
 import csv
 import os
+import sys
+import matplotlib.pyplot as plt
+import seaborn as sns
+from datetime import datetime
 
 from typing import Dict, List, Tuple, Optional
 
@@ -163,8 +167,8 @@ class BenchmarkTrainerImproved:
             rank_loss.set_train_stats(median_follow)
         combiner = None
         if loss_type.startswith("hybrid_"):
-            combiner = UncertaintyWeightedCombination(rank_loss=rank_loss, disc_time_nll_fn=self._disc_nll, use_uncertainty_weighting=self.use_uncertainty_weighting)
-        print(f"loss_type={loss_type}, horizon_kind={loss_kind}, hetero_tau={self.hetero_tau}, horizon_scale={rank_loss.derived_h.item()}, uncertainty_weighting={self.use_uncertainty_weighting if combiner else False}")
+            combiner = UncertaintyWeightedCombination(rank_loss=rank_loss, disc_time_nll_fn=self._disc_nll)
+        print(f"loss_type={loss_type}, horizon_kind={loss_kind}, hetero_tau={self.hetero_tau}, horizon_scale={rank_loss.derived_h.item():.2f}, uncertainty_weighting={self.use_uncertainty_weighting if combiner else False}")
         loss_combiner = None
         if loss_type in ['normalized_combination', 'normalized_combination_ipcw']:
             loss_combiner = NormalizedLossCombination(total_epochs=self.epochs)
@@ -251,8 +255,6 @@ class BenchmarkTrainerImproved:
                     val_loss = nll_val + pair_val
             train_losses.append(epoch_total)
             val_losses.append(val_loss.item())
-            if loss_type.startswith('hybrid_'):
-                print(f"Epoch {epoch:03d}: rank_w={combiner.rank_weight.item():.3f}, nll_w={combiner.nll_weight.item():.3f}")
             if self.epochs >= 10 and epoch % (self.epochs // 10) == 0:
                 print(f"Epoch {epoch:03d}: Total={epoch_total:.4f}")
         return {
@@ -305,6 +307,7 @@ class BenchmarkRunnerImproved:
         self.batch_size = batch_size
         self.epochs = epochs
         self.learning_rate = learning_rate
+        self.output_dir = output_dir
         self.save_results = save_results
         self.random_seed = random_seed
         if random_seed is not None:
@@ -316,18 +319,413 @@ class BenchmarkRunnerImproved:
         self.loss_type = loss_type
         self.default_experiments = ['nll', 'pairwise', 'cphl_none', 'cphl_exp', 'hybrid_exp']
 
-    def run_comparison(self, loss_types: Optional[List[str]] = None) -> Dict[str, Dict]:
-        dataloader_train, dataloader_val, dataloader_test, num_features = self.data_loader.load_data()
-        loss_types = loss_types or self.default_experiments
-        results: Dict[str, Dict] = {}
-        for lt in loss_types:
-            model = self.trainer.create_model(num_features)
-            training = self.trainer.train_model(model, dataloader_train, dataloader_val, lt)
-            evaluation = self.evaluator.evaluate_model(model, dataloader_test)
-            results[lt] = {'training': training, 'evaluation': evaluation}
+    def run_comparison(self, loss_types: Optional[List[str]] = None, num_runs: int = 1) -> Dict[str, Dict]:
+        """Run complete benchmark comparison with optional multiple runs."""
+        start_time = time_module.time()
+        
+        print("=" * 80)
+        print(f"IMPROVED SURVIVAL ANALYSIS COMPARISON - {self.dataset_config.name.upper()} DATASET")
+        if num_runs > 1:
+            print(f"Running {num_runs} independent experiments for statistical robustness")
+        print("=" * 80)
+        
+        # Store results across all runs
+        all_runs_results = []
+        
+        for run_idx in range(num_runs):
+            if num_runs > 1:
+                print(f"\n{'='*80}")
+                print(f"RUN {run_idx + 1}/{num_runs}")
+                print(f"{'='*80}")
+            
+            # Load data (fresh for each run if multiple runs)
+            dataloader_train, dataloader_val, dataloader_test, num_features = self.data_loader.load_data()
+            loss_types = loss_types or self.default_experiments
+            run_results: Dict[str, Dict] = {}
+            
+            for lt in loss_types:
+                if num_runs > 1:
+                    print(f"\n{'='*60}")
+                    print(f"TESTING {lt.upper()}")
+                    print(f"Run {run_idx + 1}/{num_runs}")
+                    print(f"{'='*60}")
+                
+                model = self.trainer.create_model(num_features)
+                training = self.trainer.train_model(model, dataloader_train, dataloader_val, lt)
+                evaluation = self.evaluator.evaluate_model(model, dataloader_test)
+                run_results[lt] = {'training': training, 'evaluation': evaluation}
+                
+                # Print results for each loss type
+                print(f"Results: Harrell C={evaluation['harrell_cindex']:.4f}, "
+                      f"Uno C={evaluation['uno_cindex']:.4f}, "
+                      f"Cum AUC={evaluation['cumulative_auc']:.4f}, "
+                      f"Inc AUC={evaluation['incident_auc']:.4f}, "
+                      f"Brier={evaluation['brier_score']:.4f}")
+            
+            all_runs_results.append(run_results)
+        
+        # Aggregate results across runs
+        if num_runs == 1:
+            final_results = all_runs_results[0]
+        else:
+            final_results = self._aggregate_multiple_runs(all_runs_results)
+        
+        # Calculate execution time
+        end_time = time_module.time()
+        execution_time = end_time - start_time
+        
+        # Analyze and visualize results
+        self._analyze_results(final_results)
+        
+        print(f"\n{'='*80}")
+        print(f"EXPERIMENT COMPLETED IN {execution_time/60:.1f} MINUTES ({execution_time:.1f} seconds)")
+        print(f"{'='*80}")
+        
         if self.save_results and self.logger:
-            self.logger.save_results(results, f"{self.dataset_config.name}_improved")
-        return results
+            run_info = {
+                'num_runs': num_runs,
+                'epochs': self.epochs,
+                'learning_rate': self.learning_rate,
+                'batch_size': self.batch_size,
+                'device': str(self.device),
+                'dataset_auc_time': self.dataset_config.auc_time,
+                'mixed_precision': self.trainer.use_mixed_precision,
+                'horizon_kind': self.trainer.horizon_kind,
+                'hetero_tau': self.trainer.hetero_tau,
+                'rel_factor': self.trainer.rel_factor,
+                'temperature': self.trainer.temperature,
+                'use_uncertainty_weighting': self.trainer.use_uncertainty_weighting
+            }
+            self.logger.save_results(final_results, f"{self.dataset_config.name}_improved")
+        
+        return final_results
+    
+    def _aggregate_multiple_runs(self, all_runs: List[Dict[str, Dict]]) -> Dict[str, Dict]:
+        """Aggregate results from multiple runs (mean and std) while preserving individual run data."""
+        aggregated = {}
+        loss_types = all_runs[0].keys()
+        
+        for loss_type in loss_types:
+            # Collect metrics across all runs
+            harrell_scores = [run[loss_type]['evaluation']['harrell_cindex'] for run in all_runs]
+            uno_scores = [run[loss_type]['evaluation']['uno_cindex'] for run in all_runs]
+            cumulative_auc_scores = [run[loss_type]['evaluation']['cumulative_auc'] for run in all_runs]
+            incident_auc_scores = [run[loss_type]['evaluation']['incident_auc'] for run in all_runs]
+            brier_scores = [run[loss_type]['evaluation']['brier_score'] for run in all_runs if not np.isnan(run[loss_type]['evaluation']['brier_score'])]
+            
+            # Aggregate training losses (use first run as representative)
+            representative_training = all_runs[0][loss_type]['training']
+            
+            aggregated[loss_type] = {
+                'training': representative_training,  # Use first run for training curves
+                'evaluation': {
+                    'harrell_cindex': np.mean(harrell_scores),
+                    'harrell_cindex_std': np.std(harrell_scores),
+                    'uno_cindex': np.mean(uno_scores),
+                    'uno_cindex_std': np.std(uno_scores),
+                    'cumulative_auc': np.mean(cumulative_auc_scores),
+                    'cumulative_auc_std': np.std(cumulative_auc_scores),
+                    'incident_auc': np.mean(incident_auc_scores),
+                    'incident_auc_std': np.std(incident_auc_scores),
+                    'brier_score': np.mean(brier_scores) if brier_scores else float('nan'),
+                    'brier_score_std': np.std(brier_scores) if brier_scores else float('nan'),
+                    'run_details': {
+                        'num_runs': len(all_runs),
+                        'individual_runs': all_runs
+                    }
+                }
+            }
+        
+        return aggregated
+    
+    def _analyze_results(self, results: Dict[str, Dict]) -> None:
+        """Analyze results and create comprehensive visualizations."""
+        print(f"\n{'='*80}")
+        print("COMPREHENSIVE RESULTS ANALYSIS")
+        print(f"{'='*80}")
+        
+        # Print comprehensive summary table
+        print(f"\n{'Method':<25} {'Harrell C':<10} {'Uno C':<10} {'Cum AUC':<10} {'Inc AUC':<10} {'Brier':<10}")
+        print("-" * 85)
+        
+        # Method name mapping for display
+        method_names = {
+            'nll': 'NLL',
+            'pairwise': 'CPL',
+            'pairwise_ipcw': 'CPL (ipcw)',
+            'cphl_none': 'CPHL (none)',
+            'cphl_exp': 'CPHL (exp)',
+            'hybrid_exp': 'Hybrid (exp)',
+            'normalized_combination': 'NLL+CPL',
+            'normalized_combination_ipcw': 'NLL+CPL (ipcw)'
+        }
+        
+        # Get NLL baseline for comparison
+        nll_harrell = results['nll']['evaluation']['harrell_cindex']
+        nll_uno = results['nll']['evaluation']['uno_cindex']
+        nll_cumulative_auc = results['nll']['evaluation']['cumulative_auc']
+        nll_incident_auc = results['nll']['evaluation']['incident_auc']
+        nll_brier = results['nll']['evaluation']['brier_score']
+        
+        for loss_type, result in results.items():
+            eval_result = result['evaluation']
+            method_name = method_names.get(loss_type, loss_type.upper())
+            
+            harrell = eval_result['harrell_cindex']
+            uno = eval_result['uno_cindex']
+            cumulative_auc = eval_result['cumulative_auc']
+            incident_auc = eval_result['incident_auc']
+            brier = eval_result['brier_score']
+            
+            print(f"{method_name:<25} {harrell:<10.4f} {uno:<10.4f} {cumulative_auc:<10.4f} {incident_auc:<10.4f} {brier:<10.4f}")
+        
+        # Print improvement analysis
+        print(f"\n{'='*80}")
+        print("IMPROVEMENT OVER NLL BASELINE")
+        print(f"{'='*80}")
+        print(f"{'Method':<25} {'Harrell Δ%':<12} {'Uno Δ%':<12} {'Cum AUC Δ%':<12} {'Inc AUC Δ%':<12} {'Brier Δ%':<12}")
+        print("-" * 105)
+        
+        for loss_type, result in results.items():
+            if loss_type == 'nll':
+                continue
+            
+            eval_result = result['evaluation']
+            method_name = method_names.get(loss_type, loss_type.upper())
+            
+            harrell_imp = ((eval_result['harrell_cindex'] - nll_harrell) / nll_harrell * 100)
+            uno_imp = ((eval_result['uno_cindex'] - nll_uno) / nll_uno * 100)
+            cumulative_auc_imp = ((eval_result['cumulative_auc'] - nll_cumulative_auc) / nll_cumulative_auc * 100)
+            incident_auc_imp = ((eval_result['incident_auc'] - nll_incident_auc) / nll_incident_auc * 100)
+            
+            # For Brier score, lower is better, so improvement is negative change
+            if not (np.isnan(nll_brier) or np.isnan(eval_result['brier_score'])):
+                brier_imp = ((nll_brier - eval_result['brier_score']) / nll_brier * 100)
+            else:
+                brier_imp = float('nan')
+            
+            print(f"{method_name:<25} {harrell_imp:<12.2f} {uno_imp:<12.2f} {cumulative_auc_imp:<12.2f} {incident_auc_imp:<12.2f} {brier_imp:<12.2f}")
+        
+        # Create comprehensive visualizations
+        self._create_comprehensive_plots(results)
+    
+    def _create_comprehensive_plots(self, results: Dict[str, Dict]) -> None:
+        """Create comprehensive visualization plots with all metrics and methods."""
+        print("\n=== Creating Comprehensive Analysis Plots ===")
+        
+        # Set up the plotting style with fixed dimensions
+        plt.style.use('default')
+        sns.set_palette("husl")
+        
+        # Create figure with 3x2 layout for comprehensive analysis
+        fig, axes = plt.subplots(3, 2, figsize=(16, 18))
+        fig.suptitle(f'Improved Survival Analysis Comparison - {self.dataset_config.name} Dataset', 
+                     fontsize=16, fontweight='bold')
+        
+        # 1. Concordance indices comparison (Harrell vs Uno)
+        self._plot_concordance_comparison(axes[0, 0], results)
+        
+        # 2. All metrics performance comparison
+        self._plot_all_metrics_comparison(axes[0, 1], results)
+        
+        # 3. New vs Standard methods comparison
+        self._plot_new_vs_standard(axes[1, 0], results)
+        
+        # 4. Training loss evolution
+        self._plot_training_evolution(axes[1, 1], results)
+        
+        # 5. Performance improvement over baseline
+        self._plot_improvement_analysis(axes[2, 0], results)
+        
+        # 6. Horizon scale analysis
+        self._plot_horizon_analysis(axes[2, 1], results)
+        
+        plt.tight_layout()
+        
+        # Save figure to results folder
+        if self.output_dir:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            figure_filename = f"{self.dataset_config.name}_improved_analysis_{timestamp}.png"
+            figure_path = os.path.join(self.output_dir, figure_filename)
+            plt.savefig(figure_path, dpi=300, bbox_inches='tight', facecolor='white')
+            print(f"📊 Comprehensive analysis figure saved: {figure_path}")
+        
+        plt.show()
+    
+    def _plot_concordance_comparison(self, ax, results):
+        """Plot Harrell vs Uno C-index comparison."""
+        method_names = ['NLL', 'CPL', 'CPL (ipcw)', 'CPHL (none)', 'CPHL (exp)', 'Hybrid (exp)']
+        methods = ['nll', 'pairwise', 'pairwise_ipcw', 'cphl_none', 'cphl_exp', 'hybrid_exp']
+        
+        harrell_scores = [results[method]['evaluation']['harrell_cindex'] for method in methods if method in results]
+        uno_scores = [results[method]['evaluation']['uno_cindex'] for method in methods if method in results]
+        
+        x = np.arange(len(harrell_scores))
+        width = 0.35
+        
+        bars1 = ax.bar(x - width/2, harrell_scores, width, label="Harrell's C-index", alpha=0.8)
+        bars2 = ax.bar(x + width/2, uno_scores, width, label="Uno's C-index", alpha=0.8)
+        
+        ax.set_xlabel('Method')
+        ax.set_ylabel('C-index Score')
+        ax.set_title('Concordance Index Comparison')
+        ax.set_xticks(x)
+        ax.set_xticklabels(method_names[:len(harrell_scores)], rotation=45, ha='right')
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+        ax.set_ylim(0.4, 1.0)
+        
+        # Add value labels
+        for bars in [bars1, bars2]:
+            for bar in bars:
+                height = bar.get_height()
+                ax.text(bar.get_x() + bar.get_width()/2., height + 0.01,
+                       f'{height:.3f}', ha='center', va='bottom', fontsize=8)
+    
+    def _plot_all_metrics_comparison(self, ax, results):
+        """Plot all metrics for all methods."""
+        method_names = ['NLL', 'CPL', 'CPL (ipcw)', 'CPHL (none)', 'CPHL (exp)', 'Hybrid (exp)']
+        methods = ['nll', 'pairwise', 'pairwise_ipcw', 'cphl_none', 'cphl_exp', 'hybrid_exp']
+        
+        # Filter methods that exist in results
+        existing_methods = [m for m in methods if m in results]
+        existing_names = [method_names[i] for i, m in enumerate(methods) if m in results]
+        
+        harrell_scores = [results[method]['evaluation']['harrell_cindex'] for method in existing_methods]
+        uno_scores = [results[method]['evaluation']['uno_cindex'] for method in existing_methods]
+        cumulative_auc_scores = [results[method]['evaluation']['cumulative_auc'] for method in existing_methods]
+        incident_auc_scores = [results[method]['evaluation']['incident_auc'] for method in existing_methods]
+        
+        # For Brier score, invert and normalize (lower is better)
+        brier_scores = []
+        for method in existing_methods:
+            brier = results[method]['evaluation']['brier_score']
+            if not np.isnan(brier):
+                brier_scores.append(max(0, 1 - brier))
+            else:
+                brier_scores.append(0)
+        
+        x = np.arange(len(existing_methods))
+        width = 0.15
+        
+        ax.bar(x - 2*width, harrell_scores, width, label="Harrell's C", alpha=0.8)
+        ax.bar(x - width, uno_scores, width, label="Uno's C", alpha=0.8)
+        ax.bar(x, cumulative_auc_scores, width, label='Cumulative AUC', alpha=0.8)
+        ax.bar(x + width, incident_auc_scores, width, label='Incident AUC', alpha=0.8)
+        ax.bar(x + 2*width, brier_scores, width, label='1-Brier', alpha=0.8)
+        
+        ax.set_xlabel('Method')
+        ax.set_ylabel('Score')
+        ax.set_title('All Metrics Comparison')
+        ax.set_xticks(x)
+        ax.set_xticklabels(existing_names, rotation=45, ha='right')
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+        ax.set_ylim(0.4, 1.0)
+    
+    def _plot_new_vs_standard(self, ax, results):
+        """Plot comparison between new and standard methods."""
+        standard_methods = ['nll', 'pairwise', 'pairwise_ipcw']
+        new_methods = ['cphl_none', 'cphl_exp', 'hybrid_exp']
+        
+        standard_scores = [results[method]['evaluation']['harrell_cindex'] for method in standard_methods if method in results]
+        new_scores = [results[method]['evaluation']['harrell_cindex'] for method in new_methods if method in results]
+        
+        standard_names = ['NLL', 'CPL', 'CPL (ipcw)']
+        new_names = ['CPHL (none)', 'CPHL (exp)', 'Hybrid (exp)']
+        
+        # Filter names to match existing methods
+        existing_standard = [name for i, method in enumerate(standard_methods) if method in results for name in [standard_names[i]]]
+        existing_new = [name for i, method in enumerate(new_methods) if method in results for name in [new_names[i]]]
+        
+        all_scores = standard_scores + new_scores
+        all_names = existing_standard + existing_new
+        
+        x = np.arange(len(all_scores))
+        colors = ['blue'] * len(standard_scores) + ['red'] * len(new_scores)
+        
+        ax.bar(x, all_scores, color=colors, alpha=0.7)
+        ax.set_xlabel('Method')
+        ax.set_ylabel("Harrell's C-index")
+        ax.set_title('Standard vs New Methods')
+        ax.set_xticks(x)
+        ax.set_xticklabels(all_names, rotation=45, ha='right')
+        ax.grid(True, alpha=0.3)
+        
+        # Add legend
+        from matplotlib.patches import Patch
+        legend_elements = [Patch(facecolor='blue', alpha=0.7, label='Standard'),
+                          Patch(facecolor='red', alpha=0.7, label='New')]
+        ax.legend(handles=legend_elements)
+    
+    def _plot_training_evolution(self, ax, results):
+        """Plot training loss evolution for all methods."""
+        method_colors = {'nll': 'blue', 'pairwise': 'orange', 'pairwise_ipcw': 'red',
+                        'cphl_none': 'green', 'cphl_exp': 'purple', 'hybrid_exp': 'brown'}
+        
+        for loss_type, result in results.items():
+            train_losses = result['training']['train_losses']
+            color = method_colors.get(loss_type, 'gray')
+            ax.plot(train_losses, label=loss_type.replace('_', ' ').title(), 
+                   alpha=0.8, linewidth=2, color=color)
+        
+        ax.set_xlabel('Epoch')
+        ax.set_ylabel('Training Loss')
+        ax.set_title('Training Loss Evolution')
+        ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+        ax.grid(True, alpha=0.3)
+    
+    def _plot_improvement_analysis(self, ax, results):
+        """Plot improvement over NLL baseline."""
+        methods = ['pairwise', 'pairwise_ipcw', 'cphl_none', 'cphl_exp', 'hybrid_exp']
+        method_names = ['CPL', 'CPL (ipcw)', 'CPHL (none)', 'CPHL (exp)', 'Hybrid (exp)']
+        
+        # Get baseline
+        nll_harrell = results['nll']['evaluation']['harrell_cindex']
+        
+        harrell_improvements = []
+        existing_methods = []
+        existing_names = []
+        
+        for method, name in zip(methods, method_names):
+            if method in results:
+                eval_result = results[method]['evaluation']
+                harrell_imp = ((eval_result['harrell_cindex'] - nll_harrell) / nll_harrell * 100)
+                harrell_improvements.append(harrell_imp)
+                existing_methods.append(method)
+                existing_names.append(name)
+        
+        x = np.arange(len(existing_methods))
+        colors = ['green' if imp > 0 else 'red' for imp in harrell_improvements]
+        
+        bars = ax.bar(x, harrell_improvements, color=colors, alpha=0.7)
+        ax.set_xlabel('Method')
+        ax.set_ylabel('Improvement over NLL (%)')
+        ax.set_title('Performance Improvement Analysis')
+        ax.set_xticks(x)
+        ax.set_xticklabels(existing_names, rotation=45, ha='right')
+        ax.axhline(y=0, color='black', linestyle='-', alpha=0.3)
+        ax.grid(True, alpha=0.3)
+        
+        # Add value labels
+        for bar, imp in zip(bars, harrell_improvements):
+            height = bar.get_height()
+            ax.text(bar.get_x() + bar.get_width()/2., height + (0.2 if height >= 0 else -0.3),
+                   f'{imp:+.1f}%', ha='center', va='bottom' if height >= 0 else 'top', 
+                   fontweight='bold', fontsize=8)
+    
+    def _plot_horizon_analysis(self, ax, results):
+        """Plot horizon scale analysis for new methods."""
+        horizon_methods = ['cphl_none', 'cphl_exp', 'hybrid_exp']
+        method_names = ['CPHL (none)', 'CPHL (exp)', 'Hybrid (exp)']
+        
+        # Get horizon scales (this would need to be stored during training)
+        # For now, we'll show a placeholder
+        ax.text(0.5, 0.5, 'Horizon Scale Analysis\n(Feature to be implemented)', 
+               ha='center', va='center', transform=ax.transAxes, fontsize=12)
+        ax.set_title('Horizon Scale Analysis')
+        ax.set_xlabel('Method')
+        ax.set_ylabel('Horizon Scale')
 
 
 if __name__ == "__main__":
@@ -335,6 +733,7 @@ if __name__ == "__main__":
     from data_loaders import DATA_LOADERS
     parser = argparse.ArgumentParser(description="Run improved survival analysis benchmark")
     parser.add_argument('--dataset', required=True, choices=DATA_LOADERS.keys(), help='Dataset name')
+    parser.add_argument('--runs', type=int, default=1, help='Number of independent runs')
     parser.add_argument('--epochs', type=int, default=50, help='Number of training epochs')
     parser.add_argument('--lr', type=float, default=5e-2, help='Learning rate')
     parser.add_argument('--no-save', action='store_true', help='Disable saving results to files')
@@ -365,4 +764,4 @@ if __name__ == "__main__":
         temperature=args.temperature,
         use_uncertainty_weighting=not args.no_uncertainty_weighting,
     )
-    runner.run_comparison(loss_types=args.loss_types)
+    runner.run_comparison(loss_types=args.loss_types, num_runs=args.runs)
