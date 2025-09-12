@@ -70,11 +70,6 @@ Each benchmark provides professional statistical analysis:
 - **Rich visualizations**: 6-panel analysis plots with fixed dimensions
 - **Professional output**: JSON + CSV + PNG files with timestamps
 
-## Key Findings
-
-- **Pairwise Ranking Loss** often provides the best performance across different survival analysis datasets
-- **Normalized Loss Combination** can provide improvements when combining NLL and Pairwise Ranking Loss
-- **Adaptive temperature scaling** and **balanced sampling** are key improvements
 
 ## Project Structure
 
