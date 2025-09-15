@@ -36,6 +36,8 @@ import sys
 import os
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'src'))
 from concordance_pairwise_loss import ConcordancePairwiseLoss, NormalizedLossCombination
+from concordance_pairwise_loss.pairwise_horizon_loss import ConcordancePairwiseHorizonLoss
+from concordance_pairwise_loss.uncertainty_combined_loss import UncertaintyWeightedCombination
 from dataset_configs import DatasetConfig, load_dataset_configs
 from abstract_data_loader import AbstractDataLoader
 
@@ -61,7 +63,12 @@ class BenchmarkEvaluator:
             for batch in dataloader_test:
                 x, (event, time) = batch
                 x, event, time = x.to(self.device), event.to(self.device), time.to(self.device)
-                log_hz = model(x)
+                out = model(x)
+                # Support models that optionally return (risk, log_tau)
+                if isinstance(out, tuple):
+                    log_hz = out[0]
+                else:
+                    log_hz = out
                 
                 all_log_hz.append(log_hz)
                 all_events.append(event)
@@ -134,12 +141,18 @@ class BenchmarkEvaluator:
 class BenchmarkTrainer:
     """Shared training logic for all benchmarks with GPU optimizations."""
     
-    def __init__(self, device: torch.device, epochs: int = 50, learning_rate: float = 5e-2, weight_decay: float = 1e-4, use_mixed_precision: bool = True):
+    def __init__(self, device: torch.device, epochs: int = 50, learning_rate: float = 5e-2, weight_decay: float = 1e-4, use_mixed_precision: bool = True, dataset_config: DatasetConfig = None, horizon_kind: str = "exp", hetero_tau: bool = False, rel_factor: float = 0.5, temperature: float = 1.0, use_uncertainty_weighting: bool = True):
         self.device = device
         self.epochs = epochs
         self.learning_rate = learning_rate
         self.weight_decay = weight_decay
         self.use_mixed_precision = use_mixed_precision and device.type == 'cuda'
+        self.dataset_config = dataset_config
+        self.horizon_kind = horizon_kind
+        self.hetero_tau = hetero_tau
+        self.rel_factor = rel_factor
+        self.temperature = temperature
+        self.use_uncertainty_weighting = use_uncertainty_weighting
         
         # Pre-initialize loss functions for efficiency
         self.pairwise_loss_fn = ConcordancePairwiseLoss(
@@ -154,20 +167,43 @@ class BenchmarkTrainer:
             pairwise_sampling='balanced',
             use_ipcw=True
         )
+        # Horizon-weighted loss and hybrid combiner (initialized per-train with stats)
+        self.rank_loss = None
+        self.hybrid_combiner = None
         
         # Mixed precision scaler
         if self.use_mixed_precision:
             self.scaler = torch.cuda.amp.GradScaler()
     
+    class _RiskModel(torch.nn.Module):
+        def __init__(self, backbone: torch.nn.Module, risk_head: torch.nn.Module, log_tau_head: Optional[torch.nn.Module] = None):
+            super().__init__()
+            self.backbone = backbone
+            self.risk_head = risk_head
+            self.log_tau_head = log_tau_head
+        def forward(self, x):
+            feats = self.backbone(x)
+            risk = self.risk_head(feats)
+            if self.log_tau_head is not None:
+                log_tau = self.log_tau_head(feats)
+                return risk, log_tau
+            return risk
+    
     def create_model(self, num_features: int) -> torch.nn.Module:
         """Create optimized model architecture with torch.compile for GPU acceleration."""
-        model = torch.nn.Sequential(
+        backbone = torch.nn.Sequential(
             torch.nn.BatchNorm1d(num_features),
-            torch.nn.Linear(num_features, 64),
+            torch.nn.Linear(num_features, 128),
             torch.nn.ReLU(),
             torch.nn.Dropout(0.2),
-            torch.nn.Linear(64, 1),
-        ).to(self.device)
+        )
+        risk_head = torch.nn.Linear(128, 1)
+        if self.hetero_tau:
+            log_tau_head = torch.nn.Linear(128, 1)
+            model = self._RiskModel(backbone, risk_head, log_tau_head)
+        else:
+            model = self._RiskModel(backbone, risk_head)
+        model = model.to(self.device)
         
         # Note: torch.compile requires triton for optimal performance on Windows
         # For now, we'll use the other GPU optimizations (mixed precision, etc.)
@@ -175,6 +211,19 @@ class BenchmarkTrainer:
         print("ℹ️  Using standard model (torch.compile requires triton on Windows)")
         
         return model
+
+    def _times_to_years(self, t: torch.Tensor) -> torch.Tensor:
+        if self.dataset_config and getattr(self.dataset_config, 'auc_time_unit', None) == "days":
+            return t / 365.25
+        return t
+
+    def _median_followup_years(self, dataloader: DataLoader) -> float:
+        times = []
+        for batch in dataloader:
+            _, (_, t) = batch
+            # extracting to CPU and converting units if necessary
+            times.append(self._times_to_years(t.cpu()))
+        return torch.cat(times).median().item()
     
     def train_model(self, 
                    model: torch.nn.Module,
@@ -193,6 +242,29 @@ class BenchmarkTrainer:
         if loss_type in ['normalized_combination', 'normalized_combination_ipcw']:
             loss_combiner = NormalizedLossCombination(total_epochs=self.epochs)
         
+        # Initialize horizon-weighted rank loss / hybrid if requested
+        loss_kind = self.horizon_kind
+        if loss_type.startswith("cphl_") or loss_type.startswith("hybrid_"):
+            loss_kind = loss_type.split("_")[1]
+        if loss_type.startswith("cphl_") or loss_type.startswith("hybrid_"):
+            median_follow = self._median_followup_years(dataloader_train)
+            self.rank_loss = ConcordancePairwiseHorizonLoss(
+                horizon_kind=loss_kind,
+                rel_factor=self.rel_factor,
+                temperature=self.temperature,
+                hetero_tau=self.hetero_tau,
+                reduction="mean",
+            )
+            if loss_kind != "none":
+                self.rank_loss.set_train_stats(median_follow)
+            if loss_type.startswith("hybrid_"):
+                self.hybrid_combiner = UncertaintyWeightedCombination(
+                    rank_loss=self.rank_loss,
+                    disc_time_nll_fn=lambda scores, times, events, **_: neg_partial_log_likelihood(
+                        scores.unsqueeze(1) if scores.dim() == 1 else scores, events, times, reduction="mean"
+                    ),
+                )
+        
         for epoch in range(self.epochs):
             # Training
             model.train()
@@ -203,17 +275,28 @@ class BenchmarkTrainer:
                 x, event, time = x.to(self.device), event.to(self.device), time.to(self.device)
                 
                 optimizer.zero_grad()
-                log_hz = model(x)
+                out = model(x)
+                if self.hetero_tau:
+                    if not isinstance(out, tuple):
+                        raise RuntimeError("hetero_tau=True requires risk and log_tau outputs")
+                    log_hz, log_tau = out
+                    log_tau = log_tau.squeeze(-1)
+                else:
+                    log_hz = out
+                    log_tau = None
                 
                 # Use mixed precision for faster training
                 if self.use_mixed_precision:
                     with torch.cuda.amp.autocast():
                         # Compute individual losses
-                        nll_loss = neg_partial_log_likelihood(log_hz, event, time, reduction="mean")
+                        nll_loss = neg_partial_log_likelihood(
+                            log_hz if (log_hz.dim() == 2) else log_hz.unsqueeze(1), event, time, reduction="mean"
+                        )
                         pairwise_loss = self.pairwise_loss_fn(log_hz, time, event)
                         pairwise_loss_ipcw = self.pairwise_loss_ipcw_fn(log_hz, time, event)
-                        
-                        # Get total loss based on type (inside autocast context)
+                        # Times in years and boolean events for horizon losses
+                        times_years = self._times_to_years(time)
+                        events_bool = event.bool()
                         if loss_type == "nll":
                             total_loss = nll_loss
                         elif loss_type == "pairwise":
@@ -230,13 +313,21 @@ class BenchmarkTrainer:
                                 epoch, nll_loss.item(), pairwise_loss_ipcw.item()
                             )
                             total_loss = nll_w * nll_loss + pairwise_w * pairwise_loss_ipcw
+                        elif loss_type.startswith("cphl_"):
+                            total_loss = self.rank_loss(log_hz.squeeze(-1), times_years, events_bool, log_tau)
+                        elif loss_type.startswith("hybrid_"):
+                            total_loss = self.hybrid_combiner(log_hz.squeeze(-1), times_years, events_bool, log_tau=log_tau)
                         else:
                             total_loss = nll_loss
                 else:
                     # Compute individual losses
-                    nll_loss = neg_partial_log_likelihood(log_hz, event, time, reduction="mean")
+                    nll_loss = neg_partial_log_likelihood(
+                        log_hz if (log_hz.dim() == 2) else log_hz.unsqueeze(1), event, time, reduction="mean"
+                    )
                     pairwise_loss = self.pairwise_loss_fn(log_hz, time, event)
                     pairwise_loss_ipcw = self.pairwise_loss_ipcw_fn(log_hz, time, event)
+                    times_years = self._times_to_years(time)
+                    events_bool = event.bool()
                     
                     # Get total loss based on type
                     if loss_type == "nll":
@@ -255,6 +346,10 @@ class BenchmarkTrainer:
                             epoch, nll_loss.item(), pairwise_loss_ipcw.item()
                         )
                         total_loss = nll_w * nll_loss + pairwise_w * pairwise_loss_ipcw
+                    elif loss_type.startswith("cphl_"):
+                        total_loss = self.rank_loss(log_hz.squeeze(-1), times_years, events_bool, log_tau)
+                    elif loss_type.startswith("hybrid_"):
+                        total_loss = self.hybrid_combiner(log_hz.squeeze(-1), times_years, events_bool, log_tau=log_tau)
                     else:
                         total_loss = nll_loss
                 
@@ -276,12 +371,21 @@ class BenchmarkTrainer:
             with torch.no_grad():
                 x_val, (event_val, time_val) = next(iter(dataloader_val))
                 x_val, event_val, time_val = x_val.to(self.device), event_val.to(self.device), time_val.to(self.device)
-                log_hz_val = model(x_val)
-                
+                out_val = model(x_val)
+                if self.hetero_tau:
+                    log_hz_val, log_tau_val = out_val
+                    log_tau_val = log_tau_val.squeeze(-1)
+                else:
+                    log_hz_val = out_val
+                    log_tau_val = None
                 # Use pre-initialized loss functions for validation
-                nll_val = neg_partial_log_likelihood(log_hz_val, event_val, time_val, reduction="mean")
+                nll_val = neg_partial_log_likelihood(
+                    log_hz_val if (log_hz_val.dim() == 2) else log_hz_val.unsqueeze(1), event_val, time_val, reduction="mean"
+                )
                 pairwise_val = self.pairwise_loss_fn(log_hz_val, time_val, event_val)
                 pairwise_val_ipcw = self.pairwise_loss_ipcw_fn(log_hz_val, time_val, event_val)
+                times_val_years = self._times_to_years(time_val)
+                events_val_bool = event_val.bool()
                 
                 if loss_type == "normalized_combination" and loss_combiner:
                     nll_w_val, pairwise_w_val = loss_combiner.get_weights_scale_balanced(
@@ -295,6 +399,10 @@ class BenchmarkTrainer:
                     val_loss = nll_w_val * nll_val + pairwise_w_val * pairwise_val_ipcw
                 elif loss_type == "pairwise_ipcw":
                     val_loss = pairwise_val_ipcw
+                elif loss_type.startswith("cphl_"):
+                    val_loss = self.rank_loss(log_hz_val.squeeze(-1), times_val_years, events_val_bool, log_tau_val)
+                elif loss_type.startswith("hybrid_"):
+                    val_loss = self.hybrid_combiner(log_hz_val.squeeze(-1), times_val_years, events_val_bool, log_tau=log_tau_val)
                 else:
                     val_loss = nll_val + pairwise_val
             
@@ -373,7 +481,14 @@ class ResultsLogger:
             'pairwise': 'CPL',
             'pairwise_ipcw': 'CPL (ipcw)',
             'normalized_combination': 'NLL+CPL',
-            'normalized_combination_ipcw': 'NLL+CPL (ipcw)'
+            'normalized_combination_ipcw': 'NLL+CPL (ipcw)',
+            'cphl_none': 'CPHL (none)',
+            'cphl_exp': 'CPHL (exp)',
+            'cphl_gauss': 'CPHL (gauss)',
+            'cphl_tri': 'CPHL (tri)',
+            'hybrid_exp': 'Hybrid (exp)',
+            'hybrid_gauss': 'Hybrid (gauss)',
+            'hybrid_tri': 'Hybrid (tri)'
         }
         
         for method, result in results.items():
@@ -450,7 +565,14 @@ class ResultsLogger:
             'pairwise': 'CPL',
             'pairwise_ipcw': 'CPL (ipcw)',
             'normalized_combination': 'NLL+CPL',
-            'normalized_combination_ipcw': 'NLL+CPL (ipcw)'
+            'normalized_combination_ipcw': 'NLL+CPL (ipcw)',
+            'cphl_none': 'CPHL (none)',
+            'cphl_exp': 'CPHL (exp)',
+            'cphl_gauss': 'CPHL (gauss)',
+            'cphl_tri': 'CPHL (tri)',
+            'hybrid_exp': 'Hybrid (exp)',
+            'hybrid_gauss': 'Hybrid (gauss)',
+            'hybrid_tri': 'Hybrid (tri)'
         }
         
         rows = []
@@ -551,7 +673,14 @@ class ResultsLogger:
             'pairwise': 'CPL',
             'pairwise_ipcw': 'CPL (ipcw)',
             'normalized_combination': 'NLL+CPL',
-            'normalized_combination_ipcw': 'NLL+CPL (ipcw)'
+            'normalized_combination_ipcw': 'NLL+CPL (ipcw)',
+            'cphl_none': 'CPHL (none)',
+            'cphl_exp': 'CPHL (exp)',
+            'cphl_gauss': 'CPHL (gauss)',
+            'cphl_tri': 'CPHL (tri)',
+            'hybrid_exp': 'Hybrid (exp)',
+            'hybrid_gauss': 'Hybrid (gauss)',
+            'hybrid_tri': 'Hybrid (tri)'
         }
         
         # Get NLL baseline
@@ -646,7 +775,14 @@ class BenchmarkVisualizer:
             'pairwise': 'CPL',
             'pairwise_ipcw': 'CPL (ipcw)',
             'normalized_combination': 'NLL+CPL',
-            'normalized_combination_ipcw': 'NLL+CPL (ipcw)'
+            'normalized_combination_ipcw': 'NLL+CPL (ipcw)',
+            'cphl_none': 'CPHL (none)',
+            'cphl_exp': 'CPHL (exp)',
+            'cphl_gauss': 'CPHL (gauss)',
+            'cphl_tri': 'CPHL (tri)',
+            'hybrid_exp': 'Hybrid (exp)',
+            'hybrid_gauss': 'Hybrid (gauss)',
+            'hybrid_tri': 'Hybrid (tri)'
         }
         
         # Get NLL baseline for comparison
@@ -747,13 +883,22 @@ class BenchmarkVisualizer:
     
     def _plot_concordance_comparison(self, ax, results):
         """Plot Harrell vs Uno C-index comparison."""
-        method_names = ['NLL', 'CPL', 'CPL (ipcw)', 'NLL+CPL', 'NLL+CPL (ipcw)']
-        methods = ['nll', 'pairwise', 'pairwise_ipcw', 'normalized_combination', 'normalized_combination_ipcw']
-        
-        harrell_scores = [results[method]['evaluation']['harrell_cindex'] for method in methods]
-        uno_scores = [results[method]['evaluation']['uno_cindex'] for method in methods]
-        
-        x = np.arange(len(method_names))
+        # Dynamically include available methods
+        all_methods = ['nll', 'pairwise', 'pairwise_ipcw', 'normalized_combination', 'normalized_combination_ipcw',
+                       'cphl_none', 'cphl_exp', 'cphl_gauss', 'cphl_tri', 'hybrid_exp', 'hybrid_gauss', 'hybrid_tri']
+        methods = [m for m in all_methods if m in results]
+        method_names = [
+            {
+                'nll': 'NLL', 'pairwise': 'CPL', 'pairwise_ipcw': 'CPL (ipcw)',
+                'normalized_combination': 'NLL+CPL', 'normalized_combination_ipcw': 'NLL+CPL (ipcw)',
+                'cphl_none': 'CPHL (none)', 'cphl_exp': 'CPHL (exp)', 'cphl_gauss': 'CPHL (gauss)', 'cphl_tri': 'CPHL (tri)',
+                'hybrid_exp': 'Hybrid (exp)', 'hybrid_gauss': 'Hybrid (gauss)', 'hybrid_tri': 'Hybrid (tri)'
+            }[m]
+            for m in methods
+        ]
+        harrell_scores = [results[m]['evaluation']['harrell_cindex'] for m in methods]
+        uno_scores = [results[m]['evaluation']['uno_cindex'] for m in methods]
+        x = np.arange(len(methods))
         width = 0.35
         
         bars1 = ax.bar(x - width/2, harrell_scores, width, label="Harrell's C-index", alpha=0.8)
@@ -777,14 +922,25 @@ class BenchmarkVisualizer:
     
     def _plot_all_metrics_comparison(self, ax, results):
         """Plot all metrics (Harrell, Uno, Cumulative AUC, Incident AUC, Brier) for all methods."""
-        method_names = ['NLL', 'CPL', 'CPL (ipcw)', 'NLL+CPL', 'NLL+CPL (ipcw)']
-        methods = ['nll', 'pairwise', 'pairwise_ipcw', 'normalized_combination', 'normalized_combination_ipcw']
+        # Dynamically include available methods
+        all_methods = ['nll', 'pairwise', 'pairwise_ipcw', 'normalized_combination', 'normalized_combination_ipcw',
+                       'cphl_none', 'cphl_exp', 'cphl_gauss', 'cphl_tri', 'hybrid_exp', 'hybrid_gauss', 'hybrid_tri']
+        methods = [m for m in all_methods if m in results]
+        method_names = [
+            {
+                'nll': 'NLL', 'pairwise': 'CPL', 'pairwise_ipcw': 'CPL (ipcw)',
+                'normalized_combination': 'NLL+CPL', 'normalized_combination_ipcw': 'NLL+CPL (ipcw)',
+                'cphl_none': 'CPHL (none)', 'cphl_exp': 'CPHL (exp)', 'cphl_gauss': 'CPHL (gauss)', 'cphl_tri': 'CPHL (tri)',
+                'hybrid_exp': 'Hybrid (exp)', 'hybrid_gauss': 'Hybrid (gauss)', 'hybrid_tri': 'Hybrid (tri)'
+            }[m]
+            for m in methods
+        ]
         
         # Normalize all metrics to [0,1] for comparison
-        harrell_scores = [results[method]['evaluation']['harrell_cindex'] for method in methods]
-        uno_scores = [results[method]['evaluation']['uno_cindex'] for method in methods]
-        cumulative_auc_scores = [results[method]['evaluation']['cumulative_auc'] for method in methods]
-        incident_auc_scores = [results[method]['evaluation']['incident_auc'] for method in methods]
+        harrell_scores = [results[m]['evaluation']['harrell_cindex'] for m in methods]
+        uno_scores = [results[m]['evaluation']['uno_cindex'] for m in methods]
+        cumulative_auc_scores = [results[m]['evaluation']['cumulative_auc'] for m in methods]
+        incident_auc_scores = [results[m]['evaluation']['incident_auc'] for m in methods]
         
         # For Brier score, invert and normalize (lower is better)
         brier_scores = []
@@ -816,12 +972,16 @@ class BenchmarkVisualizer:
     
     def _plot_ipcw_effect(self, ax, results):
         """Plot the effect of IPCW on pairwise and combination methods."""
-        methods_without_ipcw = ['pairwise', 'normalized_combination']
-        methods_with_ipcw = ['pairwise_ipcw', 'normalized_combination_ipcw']
-        method_labels = ['CPL', 'NLL+CPL']
+        methods_without_ipcw = [m for m in ['pairwise', 'normalized_combination'] if m in results]
+        methods_with_ipcw = [m for m in ['pairwise_ipcw', 'normalized_combination_ipcw'] if m in results]
+        method_labels = [
+            'CPL' if 'pairwise' in methods_without_ipcw else None,
+            'NLL+CPL' if 'normalized_combination' in methods_without_ipcw else None
+        ]
+        method_labels = [lbl for lbl in method_labels if lbl is not None]
         
-        uno_without = [results[method]['evaluation']['uno_cindex'] for method in methods_without_ipcw]
-        uno_with = [results[method]['evaluation']['uno_cindex'] for method in methods_with_ipcw]
+        uno_without = [results[m]['evaluation']['uno_cindex'] for m in methods_without_ipcw]
+        uno_with = [results[m]['evaluation']['uno_cindex'] for m in methods_with_ipcw]
         
         x = np.arange(len(method_labels))
         width = 0.35
@@ -963,7 +1123,13 @@ class BenchmarkRunner:
                  output_dir: str = "results",
                  save_results: bool = True,
                  random_seed: int = None,
-                 use_mixed_precision: bool = True):
+                 use_mixed_precision: bool = True,
+                 loss_types: List[str] = None,
+                 horizon_kind: str = 'exp',
+                 hetero_tau: bool = False,
+                 rel_factor: float = 0.5,
+                 temperature: float = 1.0,
+                 use_uncertainty_weighting: bool = True):
         
         self.data_loader = data_loader
         self.dataset_config = dataset_config
@@ -974,13 +1140,23 @@ class BenchmarkRunner:
         self.learning_rate = learning_rate
         self.random_seed = random_seed
         self.use_mixed_precision = use_mixed_precision
+        self.loss_types = loss_types
         
         # Set random seed for reproducibility if provided
         if random_seed is not None:
             self._set_random_seed(random_seed)
         
         # Initialize components
-        self.trainer = BenchmarkTrainer(self.device, epochs, learning_rate, use_mixed_precision=use_mixed_precision)
+        self.trainer = BenchmarkTrainer(
+            self.device, epochs, learning_rate,
+            use_mixed_precision=use_mixed_precision,
+            dataset_config=dataset_config,
+            horizon_kind=horizon_kind,
+            hetero_tau=hetero_tau,
+            rel_factor=rel_factor,
+            temperature=temperature,
+            use_uncertainty_weighting=use_uncertainty_weighting,
+        )
         self.evaluator = BenchmarkEvaluator(self.device, dataset_config)
         self.visualizer = BenchmarkVisualizer(dataset_config, output_dir if save_results else None)
         self.logger = ResultsLogger(dataset_config.name, output_dir) if save_results else None
@@ -1057,14 +1233,18 @@ class BenchmarkRunner:
             # Load data (fresh for each run if multiple runs)
             dataloader_train, dataloader_val, dataloader_test, num_features = self.data_loader.load_data()
             
-            # Define loss types to compare (including IPCW variants)
-            loss_types = [
-                'nll',                              # NLL without IPCW
-                'pairwise',                         # CPL without IPCW
-                'pairwise_ipcw',                    # CPL with IPCW
-                'normalized_combination',           # NLL+CPL without IPCW
-                'normalized_combination_ipcw'       # NLL+CPL with IPCW
+            # Define loss types to compare (including new horizon-weighted variants)
+            default_loss_types = [
+                'nll',
+                'pairwise',
+                'pairwise_ipcw',
+                'normalized_combination',
+                'normalized_combination_ipcw',
+                'cphl_none',
+                'cphl_exp',
+                'hybrid_exp',
             ]
+            loss_types = default_loss_types if self.loss_types is None else self.loss_types
             
             run_results = {}
             
@@ -1131,7 +1311,12 @@ class BenchmarkRunner:
                     'optimized_batch_size': True,
                     'pre_initialized_losses': True,
                     'full_test_evaluation': True
-                }
+                },
+                'horizon_kind': self.trainer.horizon_kind,
+                'hetero_tau': self.trainer.hetero_tau,
+                'rel_factor': self.trainer.rel_factor,
+                'temperature': self.trainer.temperature,
+                'use_uncertainty_weighting': self.trainer.use_uncertainty_weighting
             }
             
             saved_files = self.logger.save_results(final_results, run_info, execution_time)
@@ -1199,6 +1384,12 @@ if __name__ == "__main__":
     parser.add_argument('--no-save', action='store_true', help='Disable saving results to files')
     parser.add_argument('--output-dir', type=str, default='results', help='Output directory for results')
     parser.add_argument('--seed', type=int, default=None, help='Random seed for reproducibility')
+    parser.add_argument('--loss-types', nargs='+', default=None, help='Loss types to evaluate')
+    parser.add_argument('--horizon-kind', type=str, default='exp', help='Horizon kind for CPHL/Hybrid losses')
+    parser.add_argument('--hetero-tau', action='store_true', help='Use heterogeneous tau head')
+    parser.add_argument('--rel-factor', type=float, default=0.5, help='Relative factor for horizon loss scale')
+    parser.add_argument('--temperature', type=float, default=1.0, help='Temperature for horizon loss')
+    parser.add_argument('--no-uncertainty-weighting', action='store_true', help='Disable uncertainty weighting in Hybrid')
     args = parser.parse_args()
     data_loader_cls = DATA_LOADERS[args.dataset]
     data_loader = data_loader_cls()
@@ -1212,5 +1403,11 @@ if __name__ == "__main__":
         output_dir=args.output_dir,
         save_results=not args.no_save,
         random_seed=args.seed,
+        loss_types=args.loss_types,
+        horizon_kind=args.horizon_kind,
+        hetero_tau=args.hetero_tau,
+        rel_factor=args.rel_factor,
+        temperature=args.temperature,
+        use_uncertainty_weighting=not args.no_uncertainty_weighting,
     )
     runner.run_comparison(num_runs=args.runs)
