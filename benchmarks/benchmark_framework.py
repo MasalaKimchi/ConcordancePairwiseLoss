@@ -248,15 +248,28 @@ class BenchmarkTrainer:
             loss_kind = loss_type.split("_")[1]
         if loss_type.startswith("cphl_") or loss_type.startswith("hybrid_"):
             median_follow = self._median_followup_years(dataloader_train)
+            # Compute dataset-adaptive h bounds from training times (in years)
+            # Use interquantile range scaled to provide a reasonable window per dataset
+            times_years_all = []
+            for batch in dataloader_train:
+                _, (_, t) = batch
+                times_years_all.append(self._times_to_years(t.cpu()))
+            times_years_all = torch.cat(times_years_all)
+            q10 = torch.quantile(times_years_all, 0.10).item()
+            q90 = torch.quantile(times_years_all, 0.90).item()
+            # Ensure small positive minimum and reasonable upper bound
+            h_min_years = max(0.05, 0.25 * q10)
+            h_max_years = max(h_min_years + 1e-6, 0.75 * q90)
             self.rank_loss = ConcordancePairwiseHorizonLoss(
                 horizon_kind=loss_kind,
                 rel_factor=self.rel_factor,
                 temperature=self.temperature,
                 hetero_tau=self.hetero_tau,
                 reduction="mean",
+                use_ipcw=True,  # Enable IPCW by default for CPHL
             )
             if loss_kind != "none":
-                self.rank_loss.set_train_stats(median_follow)
+                self.rank_loss.set_train_stats(median_follow, h_min_years=h_min_years, h_max_years=h_max_years)
             if loss_type.startswith("hybrid_") and self.use_uncertainty_weighting and not loss_type.endswith("_simple"):
                 self.hybrid_combiner = UncertaintyWeightedCombination(
                     rank_loss=self.rank_loss,
@@ -1130,7 +1143,8 @@ class BenchmarkRunner:
                  hetero_tau: bool = False,
                  rel_factor: float = 0.5,
                  temperature: float = 1.0,
-                 use_uncertainty_weighting: bool = True):
+                 use_uncertainty_weighting: bool = True,
+                 num_features: Optional[int] = None):
         
         self.data_loader = data_loader
         self.dataset_config = dataset_config
@@ -1142,6 +1156,7 @@ class BenchmarkRunner:
         self.random_seed = random_seed
         self.use_mixed_precision = use_mixed_precision
         self.loss_types = loss_types
+        self.num_features = num_features
         
         # Set random seed for reproducibility if provided
         if random_seed is not None:
@@ -1232,7 +1247,7 @@ class BenchmarkRunner:
                 print(f"{'='*80}")
             
             # Load data (fresh for each run if multiple runs)
-            dataloader_train, dataloader_val, dataloader_test, num_features = self.data_loader.load_data()
+            dataloader_train, dataloader_val, dataloader_test, loader_num_features = self.data_loader.load_data()
             
             # Define loss types to compare (including new horizon-weighted variants)
             default_loss_types = [
@@ -1259,7 +1274,8 @@ class BenchmarkRunner:
                 print(f"{'='*60}")
                 
                 # Create fresh model
-                model = self.trainer.create_model(num_features)
+                effective_num_features = self.num_features if self.num_features is not None else loader_num_features
+                model = self.trainer.create_model(effective_num_features)
                 
                 # Train model
                 training_results = self.trainer.train_model(model, dataloader_train, dataloader_val, loss_type)
@@ -1393,6 +1409,7 @@ if __name__ == "__main__":
     parser.add_argument('--rel-factor', type=float, default=0.5, help='Relative factor for horizon loss scale')
     parser.add_argument('--temperature', type=float, default=1.0, help='Temperature for horizon loss')
     parser.add_argument('--no-uncertainty-weighting', action='store_true', help='Disable uncertainty weighting in Hybrid')
+    parser.add_argument('--num-features', type=int, required=True, help='Number of input features for the model')
     args = parser.parse_args()
     data_loader_cls = DATA_LOADERS[args.dataset]
     data_loader = data_loader_cls()
@@ -1412,5 +1429,6 @@ if __name__ == "__main__":
         rel_factor=args.rel_factor,
         temperature=args.temperature,
         use_uncertainty_weighting=not args.no_uncertainty_weighting,
+        num_features=args.num_features,
     )
     runner.run_comparison(num_runs=args.runs)

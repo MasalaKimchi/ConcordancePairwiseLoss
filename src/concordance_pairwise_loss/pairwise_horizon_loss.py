@@ -3,9 +3,12 @@ import torch.nn as nn
 import torch.nn.functional as F
 from typing import Optional
 
+# Import torchsurv's IPCW implementation
+from torchsurv.stats.ipcw import get_ipcw
+
 
 class ConcordancePairwiseHorizonLoss(nn.Module):
-    """Pairwise concordance surrogate with horizon weighting.
+    """Pairwise concordance surrogate with horizon weighting and IPCW support.
 
     All time quantities are assumed to already be in **years**. When
     ``horizon_kind`` is not ``"none"`` the training split median follow-up
@@ -18,6 +21,9 @@ class ConcordancePairwiseHorizonLoss(nn.Module):
     - "tri": triangular kernel max(0, 1 - Δt / (3h))
     
     where Δt is the time gap between pairs and h = median_followup * rel_factor.
+    
+    IPCW weights are applied to the earlier index (i) for each comparable pair (i,j)
+    following Uno's method for handling right-censoring.
     """
 
     def __init__(
@@ -27,6 +33,7 @@ class ConcordancePairwiseHorizonLoss(nn.Module):
         temperature: float = 1.0,
         hetero_tau: bool = False,
         reduction: str = "mean",
+        use_ipcw: bool = True,
     ) -> None:
         super().__init__()
         if horizon_kind not in {"none", "exp", "gauss", "tri"}:
@@ -39,17 +46,26 @@ class ConcordancePairwiseHorizonLoss(nn.Module):
         self.temperature = temperature
         self.hetero_tau = hetero_tau
         self.reduction = reduction
+        self.use_ipcw = use_ipcw
 
-        # Registered buffer for training statistics
+        # Registered buffers for training statistics and adaptive clamping
         self.register_buffer("median_followup_years", torch.tensor(0.0))
+        self.register_buffer("h_min_years", torch.tensor(0.0))
+        self.register_buffer("h_max_years", torch.tensor(0.0))
 
-    def set_train_stats(self, median_followup_years: float) -> None:
-        """Store the training split median follow-up time in years.
+    def set_train_stats(self, median_followup_years: float, h_min_years: Optional[float] = None, h_max_years: Optional[float] = None) -> None:
+        """Store training statistics and optional adaptive clamping bounds in years.
 
         Args:
             median_followup_years: Median follow-up in years.
+            h_min_years: Optional minimum clamp bound for h (years).
+            h_max_years: Optional maximum clamp bound for h (years).
         """
         self.median_followup_years.copy_(torch.tensor(float(median_followup_years)))
+        if h_min_years is not None:
+            self.h_min_years.copy_(torch.tensor(float(h_min_years)))
+        if h_max_years is not None:
+            self.h_max_years.copy_(torch.tensor(float(h_max_years)))
 
     def forward(
         self,
@@ -73,6 +89,23 @@ class ConcordancePairwiseHorizonLoss(nn.Module):
 
         if events.dtype != torch.bool:
             events = events.bool()
+
+        # Get IPCW weights if needed
+        if self.use_ipcw:
+            try:
+                if events.any():  # Only compute IPCW if there are events
+                    # torchsurv's get_ipcw has device issues, so we compute on CPU then move to GPU
+                    events_cpu = events.cpu()
+                    times_cpu = times.cpu()
+                    ipcw = get_ipcw(events_cpu, times_cpu)
+                    # Move result back to the same device as scores
+                    ipcw = ipcw.to(device)
+                else:
+                    ipcw = torch.ones(n, device=device)
+            except Exception:
+                ipcw = torch.ones(n, device=device)
+        else:
+            ipcw = torch.ones(n, device=device)
 
         # Comparable pair mask: t_i < t_j AND event_i
         time_diff = times.unsqueeze(1) - times.unsqueeze(0)  # (n, n)
@@ -107,20 +140,34 @@ class ConcordancePairwiseHorizonLoss(nn.Module):
             raise RuntimeError("set_train_stats must be called before forward when horizon_kind != 'none'")
 
         time_gap = torch.clamp(times.unsqueeze(0) - times.unsqueeze(1), min=0)
+        # Determine adaptive clamp bounds if provided, else default to [0.25, 5.0]
+        has_adaptive = (self.h_min_years.item() > 0.0) and (self.h_max_years.item() > 0.0) and (self.h_max_years.item() >= self.h_min_years.item())
+        if has_adaptive:
+            h_lo = self.h_min_years
+            h_hi = self.h_max_years
+        else:
+            h_lo = torch.tensor(0.25, device=device)
+            h_hi = torch.tensor(5.0, device=device)
+
         if self.horizon_kind == "exp":
-            h = torch.clamp(self.median_followup_years * self.rel_factor, 0.25, 5.0)
+            h = torch.clamp(self.median_followup_years * self.rel_factor, h_lo, h_hi)
             horizon_w = torch.exp(-time_gap / h)
         elif self.horizon_kind == "gauss":
-            h = torch.clamp(self.median_followup_years * self.rel_factor, 0.25, 5.0)
+            h = torch.clamp(self.median_followup_years * self.rel_factor, h_lo, h_hi)
             horizon_w = torch.exp(-(time_gap**2) / (2 * h**2))
         elif self.horizon_kind == "tri":
-            h = torch.clamp(self.median_followup_years * self.rel_factor, 0.25, 5.0)
+            h = torch.clamp(self.median_followup_years * self.rel_factor, h_lo, h_hi)
             horizon_w = torch.clamp(1 - time_gap / (3 * h), min=0.0)
         else:  # "none"
             horizon_w = torch.ones_like(time_gap, device=device)
             h = torch.tensor(float('nan'), device=device)
 
-        weights = horizon_w * comparable.float()
+        # Apply IPCW weights - only to earlier index (i) as per Uno's IPCW
+        # ipcw[i] applies to pair (i,j) where i is the earlier sample with event
+        ipcw_weights = ipcw.unsqueeze(1).expand(-1, n)  # Shape: (n, n)
+        
+        # Combine horizon weights with IPCW weights
+        weights = horizon_w * ipcw_weights * comparable.float()
 
         numerator = (pair_loss * weights).sum()
         denom = weights.sum().clamp_min(1e-12)
@@ -139,4 +186,12 @@ class ConcordancePairwiseHorizonLoss(nn.Module):
         """Current derived horizon scale ``h`` in years."""
         if self.horizon_kind == "none":
             return torch.tensor(float("nan"), device=self.median_followup_years.device)
-        return torch.clamp(self.median_followup_years * self.rel_factor, 0.25, 5.0)
+        device = self.median_followup_years.device
+        has_adaptive = (self.h_min_years.item() > 0.0) and (self.h_max_years.item() > 0.0) and (self.h_max_years.item() >= self.h_min_years.item())
+        if has_adaptive:
+            h_lo = self.h_min_years
+            h_hi = self.h_max_years
+        else:
+            h_lo = torch.tensor(0.25, device=device)
+            h_hi = torch.tensor(5.0, device=device)
+        return torch.clamp(self.median_followup_years * self.rel_factor, h_lo, h_hi)
