@@ -257,13 +257,15 @@ class BenchmarkTrainer:
             )
             if loss_kind != "none":
                 self.rank_loss.set_train_stats(median_follow)
-            if loss_type.startswith("hybrid_"):
+            if loss_type.startswith("hybrid_") and self.use_uncertainty_weighting and not loss_type.endswith("_simple"):
                 self.hybrid_combiner = UncertaintyWeightedCombination(
                     rank_loss=self.rank_loss,
                     disc_time_nll_fn=lambda scores, times, events, **_: neg_partial_log_likelihood(
                         scores.unsqueeze(1) if scores.dim() == 1 else scores, events, times, reduction="mean"
                     ),
                 )
+            else:
+                self.hybrid_combiner = None
         
         for epoch in range(self.epochs):
             # Training
@@ -316,7 +318,11 @@ class BenchmarkTrainer:
                         elif loss_type.startswith("cphl_"):
                             total_loss = self.rank_loss(log_hz.squeeze(-1), times_years, events_bool, log_tau)
                         elif loss_type.startswith("hybrid_"):
-                            total_loss = self.hybrid_combiner(log_hz.squeeze(-1), times_years, events_bool, log_tau=log_tau)
+                            if self.hybrid_combiner is not None:
+                                total_loss = self.hybrid_combiner(log_hz.squeeze(-1), times_years, events_bool, log_tau=log_tau)
+                            else:
+                                rank_component = self.rank_loss(log_hz.squeeze(-1), times_years, events_bool, log_tau)
+                                total_loss = nll_loss + rank_component
                         else:
                             total_loss = nll_loss
                 else:
@@ -349,7 +355,11 @@ class BenchmarkTrainer:
                     elif loss_type.startswith("cphl_"):
                         total_loss = self.rank_loss(log_hz.squeeze(-1), times_years, events_bool, log_tau)
                     elif loss_type.startswith("hybrid_"):
-                        total_loss = self.hybrid_combiner(log_hz.squeeze(-1), times_years, events_bool, log_tau=log_tau)
+                        if self.hybrid_combiner is not None:
+                            total_loss = self.hybrid_combiner(log_hz.squeeze(-1), times_years, events_bool, log_tau=log_tau)
+                        else:
+                            rank_component = self.rank_loss(log_hz.squeeze(-1), times_years, events_bool, log_tau)
+                            total_loss = nll_loss + rank_component
                     else:
                         total_loss = nll_loss
                 
@@ -402,7 +412,11 @@ class BenchmarkTrainer:
                 elif loss_type.startswith("cphl_"):
                     val_loss = self.rank_loss(log_hz_val.squeeze(-1), times_val_years, events_val_bool, log_tau_val)
                 elif loss_type.startswith("hybrid_"):
-                    val_loss = self.hybrid_combiner(log_hz_val.squeeze(-1), times_val_years, events_val_bool, log_tau=log_tau_val)
+                    if self.hybrid_combiner is not None:
+                        val_loss = self.hybrid_combiner(log_hz_val.squeeze(-1), times_val_years, events_val_bool, log_tau=log_tau_val)
+                    else:
+                        rank_component_val = self.rank_loss(log_hz_val.squeeze(-1), times_val_years, events_val_bool, log_tau_val)
+                        val_loss = nll_val + rank_component_val
                 else:
                     val_loss = nll_val + pairwise_val
             
@@ -484,11 +498,9 @@ class ResultsLogger:
             'normalized_combination_ipcw': 'NLL+CPL (ipcw)',
             'cphl_none': 'CPHL (none)',
             'cphl_exp': 'CPHL (exp)',
-            'cphl_gauss': 'CPHL (gauss)',
-            'cphl_tri': 'CPHL (tri)',
             'hybrid_exp': 'Hybrid (exp)',
-            'hybrid_gauss': 'Hybrid (gauss)',
-            'hybrid_tri': 'Hybrid (tri)'
+            'hybrid_exp_simple': 'Hybrid (exp, simple)',
+            'hybrid_none': 'Hybrid (none)'
         }
         
         for method, result in results.items():
@@ -540,6 +552,7 @@ class ResultsLogger:
             for run_idx in range(num_runs):
                 run_data = {}
                 for method, result in individual_runs[run_idx].items():
+                    # Only include evaluation metrics, not training data
                     run_data[method] = {
                         'evaluation': {k: float(v) if hasattr(v, 'item') else v 
                                      for k, v in result['evaluation'].items()}
@@ -549,6 +562,7 @@ class ResultsLogger:
             # Single run case - store as individual run
             run_data = {}
             for method, result in results.items():
+                # Only include evaluation metrics, not training data
                 run_data[method] = {
                     'evaluation': {k: float(v) if hasattr(v, 'item') else v 
                                  for k, v in result['evaluation'].items()}
@@ -568,11 +582,9 @@ class ResultsLogger:
             'normalized_combination_ipcw': 'NLL+CPL (ipcw)',
             'cphl_none': 'CPHL (none)',
             'cphl_exp': 'CPHL (exp)',
-            'cphl_gauss': 'CPHL (gauss)',
-            'cphl_tri': 'CPHL (tri)',
             'hybrid_exp': 'Hybrid (exp)',
-            'hybrid_gauss': 'Hybrid (gauss)',
-            'hybrid_tri': 'Hybrid (tri)'
+            'hybrid_exp_simple': 'Hybrid (exp, simple)',
+            'hybrid_none': 'Hybrid (none)'
         }
         
         rows = []
@@ -778,11 +790,10 @@ class BenchmarkVisualizer:
             'normalized_combination_ipcw': 'NLL+CPL (ipcw)',
             'cphl_none': 'CPHL (none)',
             'cphl_exp': 'CPHL (exp)',
-            'cphl_gauss': 'CPHL (gauss)',
-            'cphl_tri': 'CPHL (tri)',
-            'hybrid_exp': 'Hybrid (exp)',
-            'hybrid_gauss': 'Hybrid (gauss)',
-            'hybrid_tri': 'Hybrid (tri)'
+            'hybrid_exp': 'NLL + CPHL (exp)',
+            'hybrid_exp_simple': 'NLL + CPHL (exp, simple)',
+            'hybrid_none': 'NLL + CPHL (none)',
+            # disabled: gauss/tri variants
         }
         
         # Get NLL baseline for comparison
@@ -835,45 +846,35 @@ class BenchmarkVisualizer:
         self.create_comprehensive_plots(results)
     
     def create_comprehensive_plots(self, results: Dict[str, Dict]) -> None:
-        """Create comprehensive visualization plots with all metrics and methods."""
-        print("\n=== Creating Comprehensive Analysis Plots ===")
+        """Create compact visualization with two key panels and captions."""
+        print("\n=== Creating Compact Analysis Plots (2 panels) ===")
         
         # Set up the plotting style with fixed dimensions
         plt.style.use('default')
         sns.set_palette("husl")
         
-        # Create figure with 3x2 layout for comprehensive analysis
-        fig, axes = plt.subplots(3, 2, figsize=(16, 18))
-        fig.suptitle(f'Comprehensive Survival Analysis Comparison - {self.dataset_config.name} Dataset', 
-                     fontsize=16, fontweight='bold')
+        # Create figure with 1x2 layout (only first two graphs)
+        fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+        fig.suptitle(f'Survival Analysis Comparison - {self.dataset_config.name}', 
+                     fontsize=14, fontweight='bold')
         
         # 1. Concordance indices comparison (Harrell vs Uno)
-        self._plot_concordance_comparison(axes[0, 0], results)
+        self._plot_concordance_comparison(axes[0], results)
+        axes[0].set_title("Concordance (Harrell vs Uno)")
         
         # 2. All metrics performance comparison
-        self._plot_all_metrics_comparison(axes[0, 1], results)
+        self._plot_all_metrics_comparison(axes[1], results)
+        axes[1].set_title("All Metrics (higher is better; 1-Brier shown)")
         
-        # 3. IPCW effect analysis
-        self._plot_ipcw_effect(axes[1, 0], results)
-        
-        # 4. Training loss evolution
-        self._plot_training_evolution(axes[1, 1], results)
-        
-        # 5. Weight evolution for combination methods
-        self._plot_weight_evolution(axes[2, 0], results)
-        
-        # 6. Performance improvement over baseline
-        self._plot_comprehensive_improvement(axes[2, 1], results)
-        
-        plt.tight_layout()
+        plt.tight_layout(rect=[0, 0.03, 1, 0.95])
         
         # Save figure to results folder
         if self.output_dir:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            figure_filename = f"{self.dataset_config.name}_comprehensive_analysis_{timestamp}.png"
+            figure_filename = f"{self.dataset_config.name}_compact_analysis_{timestamp}.png"
             figure_path = os.path.join(self.output_dir, figure_filename)
             plt.savefig(figure_path, dpi=300, bbox_inches='tight', facecolor='white')
-            print(f"📊 Comprehensive analysis figure saved: {figure_path}")
+            print(f"📊 Compact analysis figure saved: {figure_path}")
         
         plt.show()
     
@@ -885,14 +886,14 @@ class BenchmarkVisualizer:
         """Plot Harrell vs Uno C-index comparison."""
         # Dynamically include available methods
         all_methods = ['nll', 'pairwise', 'pairwise_ipcw', 'normalized_combination', 'normalized_combination_ipcw',
-                       'cphl_none', 'cphl_exp', 'cphl_gauss', 'cphl_tri', 'hybrid_exp', 'hybrid_gauss', 'hybrid_tri']
+                       'cphl_none', 'cphl_exp', 'hybrid_exp', 'hybrid_exp_simple', 'hybrid_none']
         methods = [m for m in all_methods if m in results]
         method_names = [
             {
                 'nll': 'NLL', 'pairwise': 'CPL', 'pairwise_ipcw': 'CPL (ipcw)',
                 'normalized_combination': 'NLL+CPL', 'normalized_combination_ipcw': 'NLL+CPL (ipcw)',
-                'cphl_none': 'CPHL (none)', 'cphl_exp': 'CPHL (exp)', 'cphl_gauss': 'CPHL (gauss)', 'cphl_tri': 'CPHL (tri)',
-                'hybrid_exp': 'Hybrid (exp)', 'hybrid_gauss': 'Hybrid (gauss)', 'hybrid_tri': 'Hybrid (tri)'
+                'cphl_none': 'CPHL (none)', 'cphl_exp': 'CPHL (exp)',
+                'hybrid_exp': 'Hybrid (exp)', 'hybrid_exp_simple': 'Hybrid (exp, simple)', 'hybrid_none': 'Hybrid (none)'
             }[m]
             for m in methods
         ]
@@ -924,14 +925,14 @@ class BenchmarkVisualizer:
         """Plot all metrics (Harrell, Uno, Cumulative AUC, Incident AUC, Brier) for all methods."""
         # Dynamically include available methods
         all_methods = ['nll', 'pairwise', 'pairwise_ipcw', 'normalized_combination', 'normalized_combination_ipcw',
-                       'cphl_none', 'cphl_exp', 'cphl_gauss', 'cphl_tri', 'hybrid_exp', 'hybrid_gauss', 'hybrid_tri']
+                       'cphl_none', 'cphl_exp', 'hybrid_exp', 'hybrid_exp_simple', 'hybrid_none']
         methods = [m for m in all_methods if m in results]
         method_names = [
             {
                 'nll': 'NLL', 'pairwise': 'CPL', 'pairwise_ipcw': 'CPL (ipcw)',
                 'normalized_combination': 'NLL+CPL', 'normalized_combination_ipcw': 'NLL+CPL (ipcw)',
-                'cphl_none': 'CPHL (none)', 'cphl_exp': 'CPHL (exp)', 'cphl_gauss': 'CPHL (gauss)', 'cphl_tri': 'CPHL (tri)',
-                'hybrid_exp': 'Hybrid (exp)', 'hybrid_gauss': 'Hybrid (gauss)', 'hybrid_tri': 'Hybrid (tri)'
+                'cphl_none': 'CPHL (none)', 'cphl_exp': 'CPHL (exp)',
+                'hybrid_exp': 'Hybrid (exp)', 'hybrid_exp_simple': 'Hybrid (exp, simple)', 'hybrid_none': 'Hybrid (none)'
             }[m]
             for m in methods
         ]
@@ -1242,7 +1243,9 @@ class BenchmarkRunner:
                 'normalized_combination_ipcw',
                 'cphl_none',
                 'cphl_exp',
+                'hybrid_none',
                 'hybrid_exp',
+                'hybrid_exp_simple',
             ]
             loss_types = default_loss_types if self.loss_types is None else self.loss_types
             
