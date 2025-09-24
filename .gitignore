@@ -253,3 +253,5 @@ results/
 # Temporary experiment files
 temp/
 tmp/
+
+data/

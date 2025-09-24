@@ -125,7 +125,7 @@ class ConcordancePairwiseLoss:
         # Create comparable pairs mask: t_i < t_j AND δ_i = 1 (earlier sample had event)
         # This is the fundamental definition for survival analysis concordance
         time_ordering = time_diff < 0  # t_i < t_j (row i < col j)
-        earlier_event = events.unsqueeze(1).expand(-1, n)  # δ_i = 1 for earlier sample
+        earlier_event = events.unsqueeze(0).expand(n, -1)  # δ_i = 1 for earlier sample (row i)
         comparable_pairs = time_ordering & earlier_event
         
         # Remove diagonal (self-pairs) and ties in time
@@ -174,9 +174,21 @@ class ConcordancePairwiseLoss:
             both_events = events.unsqueeze(0) & events.unsqueeze(1)
             balance_weights = torch.ones_like(valid_pairs, dtype=torch.float)
             balance_weights[both_events & valid_pairs] = 2.0  # Higher weight for event-event pairs
-            combined_weights = ipcw_weights * balance_weights
+            
+            # Handle precomputed IPCW weights vs batch-level weights
+            if self.ipcw_weights is not None and self.ipcw_weights.size(0) != n:
+                # Precomputed weights: use them as-is for IPCW, apply balance weights separately
+                combined_weights = ipcw_weights.unsqueeze(0) * balance_weights
+            else:
+                # Batch-level weights: combine normally
+                combined_weights = ipcw_weights * balance_weights
         else:
-            combined_weights = ipcw_weights
+            # Handle precomputed IPCW weights vs batch-level weights
+            if self.ipcw_weights is not None and self.ipcw_weights.size(0) != n:
+                # Precomputed weights: broadcast to batch size
+                combined_weights = ipcw_weights.unsqueeze(0)
+            else:
+                combined_weights = ipcw_weights
         
         # Apply weights only to valid pairs
         weighted_valid_pairs = combined_weights * valid_pairs.float()

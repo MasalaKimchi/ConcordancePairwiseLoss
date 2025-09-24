@@ -118,29 +118,99 @@ class SurvivalMNISTDataset(Dataset):
         return self.events, self.survival_times
 
 
+class TorchSurvMNISTDataset(Dataset):
+    """
+    TorchSurv-compatible MNIST dataset where digit value becomes survival time.
+    
+    This follows the exact pattern from the TorchSurv tutorial:
+    - Digit 0 becomes time=10 (to prevent log(0))
+    - Digits 1-9 become time=1-9
+    - All samples have events (no censoring)
+    """
+    
+    def __init__(
+        self, 
+        root: str = './data',
+        train: bool = True,
+        download: bool = True,
+        transform: Optional[transforms.Compose] = None
+    ):
+        """
+        Initialize TorchSurv MNIST dataset.
+        
+        Args:
+            root: Root directory for MNIST data
+            train: Whether to use training set
+            download: Whether to download MNIST if not present
+            transform: Image transforms to apply
+        """
+        # Load MNIST dataset
+        self.mnist = datasets.MNIST(
+            root=root, 
+            train=train, 
+            download=download,
+            transform=transform
+        )
+    
+    def __len__(self):
+        return len(self.mnist)
+    
+    def __getitem__(self, idx):
+        """Get image and survival data following TorchSurv pattern."""
+        image, digit = self.mnist[idx]
+        
+        # Convert digit to survival time (0 -> 10, 1-9 -> 1-9)
+        # digit is already an integer from MNIST dataset
+        survival_time = 10 if digit == 0 else digit
+        event = True  # All samples have events (no censoring)
+        
+        # Convert to proper tensor types
+        survival_time = torch.tensor(survival_time, dtype=torch.float32)
+        event = torch.tensor(event, dtype=torch.bool)
+        
+        return image, (event, survival_time)
+    
+    def get_survival_data(self) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Get all survival data as tensors."""
+        # Convert all digits to survival times
+        times = []
+        for i in range(len(self.mnist)):
+            digit = self.mnist.targets[i].item()
+            survival_time = 10 if digit == 0 else digit
+            times.append(survival_time)
+        
+        events = torch.ones(len(self.mnist), dtype=torch.bool)
+        times = torch.tensor(times, dtype=torch.float32)
+        
+        return events, times
+
+
 def get_survival_mnist_transforms(
-    target_size: Tuple[int, int] = (28, 28),
+    target_size: Tuple[int, int] = (224, 224),
     normalize: bool = True
 ) -> transforms.Compose:
     """
-    Get standard transforms for SurvivalMNIST.
+    Get standard transforms for SurvivalMNIST matching TorchSurv example.
     
     Args:
-        target_size: Target image size
+        target_size: Target image size (default 224x224 for ResNet)
         normalize: Whether to normalize images
     
     Returns:
         Composed transforms
     """
+    from torchvision.transforms import v2
+    
     transform_list = [
-        transforms.Resize(target_size),
-        transforms.ToTensor(),
+        v2.ToImage(),
+        v2.ToDtype(torch.float32, scale=True),
+        v2.Resize(target_size, antialias=True),
     ]
     
     if normalize:
-        # MNIST normalization
+        # TorchSurv normalization (mean=0, std=1)
         transform_list.append(
-            transforms.Normalize(mean=[0.1307], std=[0.3081])
+            v2.Normalize(mean=(0,), std=(1,))
         )
     
     return transforms.Compose(transform_list)
@@ -181,6 +251,52 @@ def create_survival_mnist_loaders(
         max_survival_time=max_survival_time,
         min_survival_time=min_survival_time,
         event_rate=event_rate
+    )
+    
+    # Create data loaders
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=2
+    )
+    
+    test_loader = DataLoader(
+        test_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=2
+    )
+    
+    return train_loader, test_loader, 1  # 1 channel for grayscale
+
+
+def create_torchsurv_mnist_loaders(
+    batch_size: int = 128,
+    root: str = './data',
+    target_size: Tuple[int, int] = (224, 224)
+) -> Tuple[torch.utils.data.DataLoader, torch.utils.data.DataLoader, int]:
+    """
+    Create train and test data loaders for TorchSurv MNIST.
+    
+    Returns:
+        Tuple of (train_loader, test_loader, num_features)
+    """
+    from torch.utils.data import DataLoader
+    
+    transform = get_survival_mnist_transforms(target_size=target_size)
+    
+    # Create datasets
+    train_dataset = TorchSurvMNISTDataset(
+        root=root,
+        train=True,
+        transform=transform
+    )
+    
+    test_dataset = TorchSurvMNISTDataset(
+        root=root,
+        train=False,
+        transform=transform
     )
     
     # Create data loaders
