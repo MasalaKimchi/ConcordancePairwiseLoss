@@ -1,12 +1,14 @@
 """
-Dynamic weighting strategies for combining Cox loss and ConcordancePairwiseLoss.
+Dynamic weighting for combining Cox loss (NLL) and Pairwise loss.
 
-This module provides various dynamic weighting strategies to optimally combine
-Cox loss and ConcordancePairwiseLoss during training.
+Kept minimal and practical:
+- Scale-balanced normalization (simple, robust default)
+- Optional GradNorm-inspired weighting (no hard-coded factors)
 """
 
 import torch
-from typing import Tuple, List, Dict, Any
+import torch.nn as nn
+from typing import Tuple, Dict, Any, Sequence
 import numpy as np
 
 
@@ -34,7 +36,6 @@ class NormalizedLossCombination:
         self.nll_norm_factor = nll_norm_factor
         self.pairwise_norm_factor = pairwise_norm_factor
         self.weight_history = []
-        self.detailed_log = []
     
     def get_weights_scale_balanced(
         self, 
@@ -68,162 +69,67 @@ class NormalizedLossCombination:
         else:
             nll_w, pairwise_w = 0.5, 0.5
         
-        # Log detailed information
-        log_entry = {
-            'epoch': epoch,
-            'nll_loss': nll_loss,
-            'pairwise_loss': pairwise_loss,
-            'nll_norm': nll_norm,
-            'pairwise_norm': pairwise_norm,
-            'nll_w': nll_w,
-            'pairwise_w': pairwise_w
-        }
-        self.detailed_log.append(log_entry)
-        
         self.weight_history.append((nll_w, pairwise_w))
         return nll_w, pairwise_w
-    
-    def get_weights_adaptive(
-        self, 
-        epoch: int, 
-        nll_loss: float, 
-        pairwise_loss: float
+
+    def get_weights_gradnorm(
+        self,
+        epoch: int,
+        nll_loss_tensor: torch.Tensor,
+        pairwise_loss_tensor: torch.Tensor,
+        shared_parameters: Sequence[nn.Parameter],
+        alpha: float = 1.0,
+        eps: float = 1e-8,
     ) -> Tuple[float, float]:
         """
-        Adaptive weighting strategy based on loss ratios.
-        
+        Gradient-norm based weighting (GradNorm-inspired) without hard-coded scale factors.
+
+        This computes the L2 norm of gradients of each loss with respect to a set of
+        shared parameters (typically the shared backbone), and assigns weights inversely
+        proportional to those norms (optionally with exponent ``alpha``). The intuition
+        is to balance contributions so that losses with larger gradients receive smaller
+        weights and vice versa.
+
         Args:
-            epoch: Current training epoch
-            nll_loss: Current Negative Partial Log-Likelihood loss value
-            pairwise_loss: Current Pairwise Ranking Loss value
-            
+            epoch: Current epoch (not used but kept for symmetry)
+            nll_loss_tensor: Differentiable tensor for NLL loss
+            pairwise_loss_tensor: Differentiable tensor for Pairwise loss
+            shared_parameters: Iterable of shared nn.Parameters to compute grad norms on
+            alpha: Exponent controlling strength of rebalancing (1.0 = inverse proportional)
+            eps: Small constant to avoid division by zero
+
         Returns:
             Tuple of (nll_weight, pairwise_weight)
+
+        Notes:
+            - Caller must ensure ``retain_graph=True`` in upstream usage if needed.
+            - This method uses ``torch.autograd.grad`` and does not call ``backward``.
         """
-        # Adaptive weights based on loss ratios
-        total_loss = nll_loss + pairwise_loss
-        if total_loss > 0:
-            nll_w = pairwise_loss / total_loss
-            pairwise_w = nll_loss / total_loss
-        else:
-            nll_w, pairwise_w = 0.5, 0.5
-        
-        # Apply epoch-based adjustment
-        epoch_factor = min(epoch / self.total_epochs, 1.0)
-        nll_w = nll_w * (1 - 0.3 * epoch_factor) + 0.3 * epoch_factor * 0.5
-        pairwise_w = pairwise_w * (1 - 0.3 * epoch_factor) + 0.3 * epoch_factor * 0.5
-        
-        self.weight_history.append((nll_w, pairwise_w))
-        return nll_w, pairwise_w
-    
-    def get_weights_linear(
-        self, 
-        epoch: int, 
-        nll_loss: float, 
-        pairwise_loss: float
-    ) -> Tuple[float, float]:
-        """
-        Linear weighting strategy that changes over epochs.
-        
-        Args:
-            epoch: Current training epoch
-            nll_loss: Current Negative Partial Log-Likelihood loss value
-            pairwise_loss: Current Pairwise Ranking Loss value
-            
-        Returns:
-            Tuple of (nll_weight, pairwise_weight)
-        """
-        # Linear progression from equal weights to loss-based weights
-        progress = epoch / self.total_epochs
-        
-        # Start with equal weights, gradually move to loss-based weights
-        nll_w = 0.5 * (1 - progress) + (pairwise_loss / (nll_loss + pairwise_loss)) * progress
-        pairwise_w = 0.5 * (1 - progress) + (nll_loss / (nll_loss + pairwise_loss)) * progress
-        
-        self.weight_history.append((nll_w, pairwise_w))
-        return nll_w, pairwise_w
-    
-    def get_weights_cosine(
-        self, 
-        epoch: int, 
-        nll_loss: float, 
-        pairwise_loss: float
-    ) -> Tuple[float, float]:
-        """
-        Cosine annealing weighting strategy.
-        
-        Args:
-            epoch: Current training epoch
-            nll_loss: Current Negative Partial Log-Likelihood loss value
-            pairwise_loss: Current Pairwise Ranking Loss value
-            
-        Returns:
-            Tuple of (nll_weight, pairwise_weight)
-        """
-        # Cosine annealing between equal weights and loss-based weights
-        progress = epoch / self.total_epochs
-        cosine_factor = 0.5 * (1 + np.cos(np.pi * progress))
-        
-        loss_based_nll = pairwise_loss / (nll_loss + pairwise_loss)
-        loss_based_pairwise = nll_loss / (nll_loss + pairwise_loss)
-        
-        nll_w = 0.5 * cosine_factor + loss_based_nll * (1 - cosine_factor)
-        pairwise_w = 0.5 * cosine_factor + loss_based_pairwise * (1 - cosine_factor)
-        
-        self.weight_history.append((nll_w, pairwise_w))
-        return nll_w, pairwise_w
-    
-    def get_weights(
-        self, 
-        epoch: int, 
-        nll_loss: float, 
-        pairwise_loss: float,
-        strategy: str = "scale_balanced"
-    ) -> Tuple[float, float]:
-        """
-        Get weights using specified strategy.
-        
-        Args:
-            epoch: Current training epoch
-            nll_loss: Current Negative Partial Log-Likelihood loss value
-            pairwise_loss: Current Pairwise Ranking Loss value
-            strategy: Weighting strategy ('scale_balanced', 'adaptive', 'linear', 'cosine')
-            
-        Returns:
-            Tuple of (nll_weight, pairwise_weight)
-        """
-        if strategy == "scale_balanced":
-            return self.get_weights_scale_balanced(epoch, nll_loss, pairwise_loss)
-        elif strategy == "adaptive":
-            return self.get_weights_adaptive(epoch, nll_loss, pairwise_loss)
-        elif strategy == "linear":
-            return self.get_weights_linear(epoch, nll_loss, pairwise_loss)
-        elif strategy == "cosine":
-            return self.get_weights_cosine(epoch, nll_loss, pairwise_loss)
-        else:
-            raise ValueError(f"Unknown strategy: {strategy}")
-    
-    def get_weight_statistics(self) -> Dict[str, Any]:
-        """
-        Get statistics about weight evolution.
-        
-        Returns:
-            Dictionary containing weight statistics
-        """
-        if not self.weight_history:
-            return {}
-        
-        nll_weights = [w[0] for w in self.weight_history]
-        pairwise_weights = [w[1] for w in self.weight_history]
-        
-        return {
-            'nll_weight_mean': np.mean(nll_weights),
-            'nll_weight_std': np.std(nll_weights),
-            'nll_weight_min': np.min(nll_weights),
-            'nll_weight_max': np.max(nll_weights),
-            'pairwise_weight_mean': np.mean(pairwise_weights),
-            'pairwise_weight_std': np.std(pairwise_weights),
-            'pairwise_weight_min': np.min(pairwise_weights),
-            'pairwise_weight_max': np.max(pairwise_weights),
-            'total_epochs': len(self.weight_history)
-        }
+        params = [p for p in shared_parameters if p is not None and p.requires_grad]
+        if len(params) == 0:
+            # Fallback to equal weights if no parameters provided
+            return 0.5, 0.5
+
+        def grad_l2_norm(loss_t: torch.Tensor) -> torch.Tensor:
+            grads = torch.autograd.grad(
+                loss_t, params, retain_graph=True, allow_unused=True
+            )
+            sq_sum = torch.zeros((), device=loss_t.device)
+            for g in grads:
+                if g is not None:
+                    sq_sum = sq_sum + (g.detach()**2).sum()
+            return torch.sqrt(sq_sum + eps)
+
+        g_nll = grad_l2_norm(nll_loss_tensor)
+        g_pair = grad_l2_norm(pairwise_loss_tensor)
+
+        # Inverse-gradient weighting with exponent alpha
+        inv_nll = (g_nll + eps).pow(-alpha)
+        inv_pair = (g_pair + eps).pow(-alpha)
+        s = inv_nll + inv_pair + eps
+        w_nll = (inv_nll / s).clamp_(0.0, 1.0)
+        w_pair = (inv_pair / s).clamp_(0.0, 1.0)
+
+        # Record for analysis (store floats)
+        self.weight_history.append((float(w_nll.item()), float(w_pair.item())))
+        return float(w_nll.item()), float(w_pair.item())

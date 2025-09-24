@@ -317,7 +317,7 @@ class MIMICDataLoader(AbstractDataLoader):
     def __init__(
         self, 
         batch_size: int = 128,
-        data_dir: str = "Z:/mimic-cxr-jpg-2.1.0.physionet.org/",
+        data_dir: str = "Y:/mimic-cxr-jpg-2.1.0.physionet.org/",
         csv_path: str = "data/mimic/mimic_cxr_splits.csv",
         target_size: Tuple[int, int] = (224, 224),
         use_augmentation: bool = True
@@ -440,6 +440,64 @@ class MIMICDataLoader(AbstractDataLoader):
         return train_loader, val_loader, test_loader, num_features
 
 
+class SurvivalMNISTDataLoader(AbstractDataLoader):
+    """SurvivalMNIST dataset loader for quick imaging experiments."""
+    
+    def __init__(
+        self, 
+        batch_size: int = 128,
+        root: str = './data',
+        target_size: Tuple[int, int] = (28, 28),
+        max_survival_time: float = 100.0,
+        min_survival_time: float = 1.0,
+        event_rate: float = 0.7
+    ):
+        """
+        Initialize SurvivalMNIST data loader.
+        
+        Args:
+            batch_size: Batch size for data loaders
+            root: Root directory for MNIST data
+            target_size: Target image size
+            max_survival_time: Maximum survival time
+            min_survival_time: Minimum survival time
+            event_rate: Probability of having an event
+        """
+        self.batch_size = batch_size
+        self.root = root
+        self.target_size = target_size
+        self.max_survival_time = max_survival_time
+        self.min_survival_time = min_survival_time
+        self.event_rate = event_rate
+    
+    def load_data(self) -> Tuple[DataLoader, DataLoader, DataLoader, int]:
+        """
+        Load SurvivalMNIST dataset.
+        
+        Returns:
+            Tuple of (train_loader, val_loader, test_loader, num_features)
+        """
+        from .survival_mnist_dataset import create_survival_mnist_loaders
+        
+        # Create train and test loaders
+        train_loader, test_loader, num_features = create_survival_mnist_loaders(
+            batch_size=self.batch_size,
+            root=self.root,
+            target_size=self.target_size,
+            max_survival_time=self.max_survival_time,
+            min_survival_time=self.min_survival_time,
+            event_rate=self.event_rate
+        )
+        
+        # For simplicity, use test_loader as validation loader
+        # In practice, you might want to split train into train/val
+        val_loader = test_loader
+        
+        print(f"SurvivalMNIST loaded - Train: {len(train_loader.dataset)}, Test: {len(test_loader.dataset)}")
+        
+        return train_loader, val_loader, test_loader, num_features
+
+
 DATA_LOADERS = {
     'gbsg2': GBSG2DataLoader,
     'flchain': FLChainDataLoader,
@@ -447,6 +505,7 @@ DATA_LOADERS = {
     'rossi': RossiDataLoader,
     'whas500': WHAS500DataLoader,
     'cancer': CancerDataLoader,
+    'survival_mnist': SurvivalMNISTDataLoader,
     'support2': SUPPORT2DataLoader,
     'metabric': METABRICDataLoader,
     'mimic': MIMICDataLoader,

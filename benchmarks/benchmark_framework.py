@@ -809,12 +809,16 @@ class BenchmarkVisualizer:
             # disabled: gauss/tri variants
         }
         
-        # Get NLL baseline for comparison
-        nll_harrell = results['nll']['evaluation']['harrell_cindex']
-        nll_uno = results['nll']['evaluation']['uno_cindex']
-        nll_cumulative_auc = results['nll']['evaluation']['cumulative_auc']
-        nll_incident_auc = results['nll']['evaluation']['incident_auc']
-        nll_brier = results['nll']['evaluation']['brier_score']
+        # Get NLL baseline for comparison (if available)
+        if 'nll' in results:
+            nll_harrell = results['nll']['evaluation']['harrell_cindex']
+            nll_uno = results['nll']['evaluation']['uno_cindex']
+            nll_cumulative_auc = results['nll']['evaluation']['cumulative_auc']
+            nll_incident_auc = results['nll']['evaluation']['incident_auc']
+            nll_brier = results['nll']['evaluation']['brier_score']
+        else:
+            # No NLL baseline available (e.g., single loss type sweep)
+            nll_harrell = nll_uno = nll_cumulative_auc = nll_incident_auc = nll_brier = None
         
         for loss_type, result in results.items():
             eval_result = result['evaluation']
@@ -828,32 +832,37 @@ class BenchmarkVisualizer:
             
             print(f"{method_name:<25} {harrell:<10.4f} {uno:<10.4f} {cumulative_auc:<10.4f} {incident_auc:<10.4f} {brier:<10.4f}")
         
-        # Print improvement analysis
-        print(f"\n{'='*80}")
-        print("IMPROVEMENT OVER NLL BASELINE")
-        print(f"{'='*80}")
-        print(f"{'Method':<25} {'Harrell Δ%':<12} {'Uno Δ%':<12} {'Cum AUC Δ%':<12} {'Inc AUC Δ%':<12} {'Brier Δ%':<12}")
-        print("-" * 105)
-        
-        for loss_type, result in results.items():
-            if loss_type == 'nll':
-                continue
+        # Print improvement analysis (only if NLL baseline available)
+        if nll_harrell is not None:
+            print(f"\n{'='*80}")
+            print("IMPROVEMENT OVER NLL BASELINE")
+            print(f"{'='*80}")
+            print(f"{'Method':<25} {'Harrell Δ%':<12} {'Uno Δ%':<12} {'Cum AUC Δ%':<12} {'Inc AUC Δ%':<12} {'Brier Δ%':<12}")
+            print("-" * 105)
             
-            eval_result = result['evaluation']
-            method_name = method_names.get(loss_type, loss_type.upper())
-            
-            harrell_imp = ((eval_result['harrell_cindex'] - nll_harrell) / nll_harrell * 100)
-            uno_imp = ((eval_result['uno_cindex'] - nll_uno) / nll_uno * 100)
-            cumulative_auc_imp = ((eval_result['cumulative_auc'] - nll_cumulative_auc) / nll_cumulative_auc * 100)
-            incident_auc_imp = ((eval_result['incident_auc'] - nll_incident_auc) / nll_incident_auc * 100)
-            
-            # For Brier score, lower is better, so improvement is negative change
-            if not (np.isnan(nll_brier) or np.isnan(eval_result['brier_score'])):
-                brier_imp = ((nll_brier - eval_result['brier_score']) / nll_brier * 100)
-            else:
-                brier_imp = float('nan')
-            
-            print(f"{method_name:<25} {harrell_imp:<12.2f} {uno_imp:<12.2f} {cumulative_auc_imp:<12.2f} {incident_auc_imp:<12.2f} {brier_imp:<12.2f}")
+            for loss_type, result in results.items():
+                if loss_type == 'nll':
+                    continue
+                
+                eval_result = result['evaluation']
+                method_name = method_names.get(loss_type, loss_type.upper())
+                
+                harrell_imp = ((eval_result['harrell_cindex'] - nll_harrell) / nll_harrell * 100)
+                uno_imp = ((eval_result['uno_cindex'] - nll_uno) / nll_uno * 100)
+                cumulative_auc_imp = ((eval_result['cumulative_auc'] - nll_cumulative_auc) / nll_cumulative_auc * 100)
+                incident_auc_imp = ((eval_result['incident_auc'] - nll_incident_auc) / nll_incident_auc * 100)
+                
+                # For Brier score, lower is better, so improvement is negative change
+                if not (np.isnan(nll_brier) or np.isnan(eval_result['brier_score'])):
+                    brier_imp = ((nll_brier - eval_result['brier_score']) / nll_brier * 100)
+                else:
+                    brier_imp = float('nan')
+                
+                print(f"{method_name:<25} {harrell_imp:<12.2f} {uno_imp:<12.2f} {cumulative_auc_imp:<12.2f} {incident_auc_imp:<12.2f} {brier_imp:<12.2f}")
+        else:
+            print(f"\n{'='*80}")
+            print("SINGLE METHOD EVALUATION (No NLL baseline available)")
+            print(f"{'='*80}")
         
         # Create comprehensive visualizations
         self.create_comprehensive_plots(results)
@@ -1076,11 +1085,15 @@ class BenchmarkVisualizer:
         methods = ['pairwise', 'pairwise_ipcw', 'normalized_combination', 'normalized_combination_ipcw']
         method_names = ['CPL', 'CPL (ipcw)', 'NLL+CPL', 'NLL+CPL (ipcw)']
         
-        # Get baseline
-        nll_harrell = results['nll']['evaluation']['harrell_cindex']
-        nll_uno = results['nll']['evaluation']['uno_cindex']
-        nll_cumulative_auc = results['nll']['evaluation']['cumulative_auc']
-        nll_incident_auc = results['nll']['evaluation']['incident_auc']
+        # Get baseline (if available)
+        if 'nll' in results:
+            nll_harrell = results['nll']['evaluation']['harrell_cindex']
+            nll_uno = results['nll']['evaluation']['uno_cindex']
+            nll_cumulative_auc = results['nll']['evaluation']['cumulative_auc']
+            nll_incident_auc = results['nll']['evaluation']['incident_auc']
+        else:
+            # No NLL baseline available, skip this plot
+            return
         
         harrell_improvements = []
         uno_improvements = []
