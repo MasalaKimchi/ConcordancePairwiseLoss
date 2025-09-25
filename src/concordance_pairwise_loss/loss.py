@@ -73,6 +73,7 @@ class ConcordancePairwiseLoss:
         log_risks: torch.Tensor,
         times: torch.Tensor,
         events: torch.Tensor,
+        sample_indices: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         """
         Compute the ConcordancePairwiseLoss.
@@ -114,7 +115,19 @@ class ConcordancePairwiseLoss:
                 # Move result back to the same device as log_risks
                 ipcw = ipcw.to(log_risks.device)
         elif self.use_ipcw and self.ipcw_weights is not None:
-            ipcw = self.ipcw_weights.to(log_risks.device)
+            # Use precomputed weights
+            if sample_indices is not None:
+                # Use specific indices for batch samples
+                ipcw = self.ipcw_weights[sample_indices].to(log_risks.device)
+            else:
+                # Fall back to computing IPCW on current batch
+                if not events.any():
+                    ipcw = torch.ones(n, device=log_risks.device)
+                else:
+                    events_cpu = events.cpu()
+                    times_cpu = times.cpu()
+                    ipcw = get_ipcw(events_cpu, times_cpu)
+                    ipcw = ipcw.to(log_risks.device)
         else:
             ipcw = torch.ones(n, device=log_risks.device)
         
@@ -175,20 +188,11 @@ class ConcordancePairwiseLoss:
             balance_weights = torch.ones_like(valid_pairs, dtype=torch.float)
             balance_weights[both_events & valid_pairs] = 2.0  # Higher weight for event-event pairs
             
-            # Handle precomputed IPCW weights vs batch-level weights
-            if self.ipcw_weights is not None and self.ipcw_weights.size(0) != n:
-                # Precomputed weights: use them as-is for IPCW, apply balance weights separately
-                combined_weights = ipcw_weights.unsqueeze(0) * balance_weights
-            else:
-                # Batch-level weights: combine normally
-                combined_weights = ipcw_weights * balance_weights
+            # Combine IPCW weights with balance weights
+            combined_weights = ipcw_weights * balance_weights
         else:
-            # Handle precomputed IPCW weights vs batch-level weights
-            if self.ipcw_weights is not None and self.ipcw_weights.size(0) != n:
-                # Precomputed weights: broadcast to batch size
-                combined_weights = ipcw_weights.unsqueeze(0)
-            else:
-                combined_weights = ipcw_weights
+            # Use IPCW weights directly
+            combined_weights = ipcw_weights
         
         # Apply weights only to valid pairs
         weighted_valid_pairs = combined_weights * valid_pairs.float()

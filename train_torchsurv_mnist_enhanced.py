@@ -87,12 +87,14 @@ class LitMNISTEnhanced(L.LightningModule):
                 use_ipcw=True
             )
         elif self.loss_type == "cpl_ipcw_batch":
+            # For batch variant, we'll compute IPCW on the current batch
+            # rather than using precomputed weights to avoid tensor size issues
             self.loss_fn = ConcordancePairwiseLoss(
                 reduction="mean",
                 temp_scaling='linear',
                 pairwise_sampling='balanced',
                 use_ipcw=True,
-                ipcw_weights=self.precomputed_ipcw_weights
+                ipcw_weights=None  # Compute IPCW on current batch
             )
         else:
             raise ValueError(f"Unknown loss type: {self.loss_type}")

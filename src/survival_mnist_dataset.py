@@ -125,7 +125,7 @@ class TorchSurvMNISTDataset(Dataset):
     This follows the exact pattern from the TorchSurv tutorial:
     - Digit 0 becomes time=10 (to prevent log(0))
     - Digits 1-9 become time=1-9
-    - All samples have events (no censoring)
+    - Introduces censoring to make IPCW meaningful
     """
     
     def __init__(
@@ -133,7 +133,8 @@ class TorchSurvMNISTDataset(Dataset):
         root: str = './data',
         train: bool = True,
         download: bool = True,
-        transform: Optional[transforms.Compose] = None
+        transform: Optional[transforms.Compose] = None,
+        censoring_rate: float = 0.3
     ):
         """
         Initialize TorchSurv MNIST dataset.
@@ -143,6 +144,7 @@ class TorchSurvMNISTDataset(Dataset):
             train: Whether to use training set
             download: Whether to download MNIST if not present
             transform: Image transforms to apply
+            censoring_rate: Fraction of samples to censor (0.0 = no censoring, 1.0 = all censored)
         """
         # Load MNIST dataset
         self.mnist = datasets.MNIST(
@@ -151,24 +153,43 @@ class TorchSurvMNISTDataset(Dataset):
             download=download,
             transform=transform
         )
+        
+        # Store censoring rate
+        self.censoring_rate = censoring_rate
     
     def __len__(self):
         return len(self.mnist)
     
     def __getitem__(self, idx):
-        """Get image and survival data following TorchSurv pattern."""
+        """Get image and survival data following TorchSurv pattern with censoring."""
         image, digit = self.mnist[idx]
         
         # Convert digit to survival time (0 -> 10, 1-9 -> 1-9)
         # digit is already an integer from MNIST dataset
         survival_time = 10 if digit == 0 else digit
-        event = True  # All samples have events (no censoring)
+        
+        # Introduce censoring based on censoring_rate
+        # Use a deterministic approach based on idx to ensure reproducibility
+        import random
+        random.seed(idx)  # Ensure reproducible censoring
+        is_censored = random.random() < self.censoring_rate
+        
+        if is_censored:
+            # Censor the sample: event=False, time=observed_time (could be < survival_time)
+            # For simplicity, use a random censoring time between 1 and survival_time
+            censoring_time = random.uniform(1.0, float(survival_time))
+            event = False
+            observed_time = censoring_time
+        else:
+            # No censoring: event=True, time=survival_time
+            event = True
+            observed_time = survival_time
         
         # Convert to proper tensor types
-        survival_time = torch.tensor(survival_time, dtype=torch.float32)
+        observed_time = torch.tensor(observed_time, dtype=torch.float32)
         event = torch.tensor(event, dtype=torch.bool)
         
-        return image, (event, survival_time)
+        return image, (event, observed_time)
     
     def get_survival_data(self) -> Tuple[torch.Tensor, torch.Tensor]:
         """Get all survival data as tensors."""
@@ -274,10 +295,17 @@ def create_survival_mnist_loaders(
 def create_torchsurv_mnist_loaders(
     batch_size: int = 128,
     root: str = './data',
-    target_size: Tuple[int, int] = (224, 224)
+    target_size: Tuple[int, int] = (224, 224),
+    censoring_rate: float = 0.3
 ) -> Tuple[torch.utils.data.DataLoader, torch.utils.data.DataLoader, int]:
     """
     Create train and test data loaders for TorchSurv MNIST.
+    
+    Args:
+        batch_size: Batch size for data loaders
+        root: Root directory for MNIST data
+        target_size: Target image size (height, width)
+        censoring_rate: Fraction of samples to censor (0.0 = no censoring, 1.0 = all censored)
     
     Returns:
         Tuple of (train_loader, test_loader, num_features)
@@ -290,13 +318,15 @@ def create_torchsurv_mnist_loaders(
     train_dataset = TorchSurvMNISTDataset(
         root=root,
         train=True,
-        transform=transform
+        transform=transform,
+        censoring_rate=censoring_rate
     )
     
     test_dataset = TorchSurvMNISTDataset(
         root=root,
         train=False,
-        transform=transform
+        transform=transform,
+        censoring_rate=censoring_rate
     )
     
     # Create data loaders
