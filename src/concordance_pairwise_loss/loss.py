@@ -138,7 +138,7 @@ class ConcordancePairwiseLoss:
         # Create comparable pairs mask: t_i < t_j AND δ_i = 1 (earlier sample had event)
         # This is the fundamental definition for survival analysis concordance
         time_ordering = time_diff < 0  # t_i < t_j (row i < col j)
-        earlier_event = events.unsqueeze(0).expand(n, -1)  # δ_i = 1 for earlier sample (row i)
+        earlier_event = events.unsqueeze(1).expand(-1, n)  # δ_i = 1 for earlier sample
         comparable_pairs = time_ordering & earlier_event
         
         # Remove diagonal (self-pairs) and ties in time

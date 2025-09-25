@@ -444,9 +444,9 @@ class TabularBenchmarkRunner:
             print(f"{'='*50}")
             
             # Define grids
-            lr_grid = [0.001, 0.005, 0.0005]
+            lr_grid = [0.05, 0.001, 0.005, 0.0005]
             hd_grid = [64, 128]
-            temp_grid = [0.5, 1.0] if (loss_type != 'nll') else [1.0]
+            temp_grid = [0.25, 0.5, 1.0] if (loss_type != 'nll') else [1.0]
                 
             for hd in hd_grid:
                 best_val_uno = -1.0
@@ -524,8 +524,11 @@ class TabularBenchmarkRunner:
             print(f"\n{'='*80}")
             print("RESULTS SAVED TO FILES")
             print(f"{'='*80}")
-            for file_type, filepath in saved_files.items():
-                print(f"{file_type.upper()}: {filepath}")
+            if saved_files:
+                for file_type, filepath in saved_files.items():
+                    print(f"{file_type.upper()}: {filepath}")
+            else:
+                print("No additional files saved by logger")
         
         return results
     
