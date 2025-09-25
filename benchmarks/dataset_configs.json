@@ -1,13 +1,8 @@
 {
   "gbsg2": {"name": "GBSG2", "auc_time": 1825.0, "auc_time_unit": "days"},
-  "lung": {"name": "Lung", "auc_time": 365.0, "auc_time_unit": "days"},
-  "rossi": {"name": "Rossi", "auc_time": 365.0, "auc_time_unit": "days"},
   "flchain": {"name": "FLChain", "auc_time": 1825.0, "auc_time_unit": "days"},
   "whas500": {"name": "WHAS500", "auc_time": 365.0, "auc_time_unit": "days"},
-  "veterans": {"name": "Veterans", "auc_time": 365.0, "auc_time_unit": "days"},
-  "breast_cancer": {"name": "Breast Cancer", "auc_time": 1825.0, "auc_time_unit": "days"},
   "support2": {"name": "SUPPORT2", "auc_time": 180.0, "auc_time_unit": "days"},
-  "cancer": {"name": "Cancer", "auc_time": 365.0, "auc_time_unit": "days"},
   "metabric": {"name": "METABRIC", "auc_time": 200.0, "auc_time_unit": "days"},
   "mimic": {"name": "MIMIC-IV CXR", "auc_time": 365.0, "auc_time_unit": "days"},
   "survival_mnist": {"name": "SurvivalMNIST", "auc_time": 50.0, "auc_time_unit": "days"}

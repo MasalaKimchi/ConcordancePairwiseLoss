@@ -59,9 +59,8 @@ python benchmarks/benchmark_framework_improved.py --dataset gbsg2 --loss-type nl
 3. Run the benchmark with `--dataset <name>`.
 
 ### Available Datasets
-- **Large datasets**: FLChain (7,874), SUPPORT2 (9,105)
-- **Medium datasets**: GBSG2 (686), WHAS500 (500), Rossi (432), Lung (228), Cancer (228), METABRIC (1,980)
-- **Small datasets**: Breast Cancer (198), Veterans (137)
+- **Large datasets**: FLChain (7,874), SUPPORT2 (8,873)
+- **Medium datasets**: GBSG2 (686), WHAS500 (500), METABRIC (1,903)
 - **Medical Imaging**: MIMIC-IV Chest X-ray (see [README_MIMIC.md](README_MIMIC.md) for details)
 
 ### Statistical Analysis
