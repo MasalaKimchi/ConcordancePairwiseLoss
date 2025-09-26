@@ -25,10 +25,11 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import numpy as np
 from datetime import datetime
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Tuple
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
+from scipy import stats
 
 # Ensure we can import the original framework
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'src'))
@@ -52,7 +53,7 @@ class TabularBenchmarkTrainer:
     def __init__(
         self, 
         device: torch.device, 
-        epochs: int = 100, 
+        epochs: int = 15, 
         learning_rate: float = 5e-2, 
         weight_decay: float = 1e-4,
         hidden_dim: int = 128,
@@ -114,7 +115,6 @@ class TabularBenchmarkTrainer:
         model = self._RiskModel(backbone, risk_head)
         model = model.to(self.device)
         
-        print(f"Using tabular model with {num_features} → {self.hidden_dim} → 1")
         return model
     
     def _precompute_ipcw_weights(self, dataloader_train: DataLoader) -> None:
@@ -346,7 +346,7 @@ class TabularBenchmarkRunner:
     def __init__(
         self,
         dataset_name: str,
-        epochs: int = 100,
+        epochs: int = 15,
         learning_rate: float = 5e-2,
         weight_decay: float = 1e-4,
         hidden_dim: int = 128,
@@ -355,7 +355,8 @@ class TabularBenchmarkRunner:
         output_dir: str = "results",
         save_results: bool = True,
         random_seed: int = None,
-        num_features: Optional[int] = None
+        num_features: Optional[int] = None,
+        num_runs: int = 5
     ):
         if dataset_name not in self.TABULAR_DATASETS:
             raise ValueError(f"Dataset {dataset_name} not in tabular datasets: {self.TABULAR_DATASETS}")
@@ -370,6 +371,7 @@ class TabularBenchmarkRunner:
         self.save_results = save_results
         self.random_seed = random_seed
         self.num_features = num_features
+        self.num_runs = num_runs
         
         # Initialize dataset components
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -403,6 +405,7 @@ class TabularBenchmarkRunner:
         print(f"  Device: {self.device}")
         print(f"  Hidden dim: {hidden_dim}")
         print(f"  Learning rate: {learning_rate}")
+        print(f"  Number of runs: {num_runs}")
         if self.device.type == 'cuda':
             print("  ✅ Mixed precision enabled")
         if random_seed is not None:
@@ -422,13 +425,14 @@ class TabularBenchmarkRunner:
         torch.backends.cudnn.benchmark = False
     
     def run_comparison(self) -> Dict[str, Dict]:
-        """Run comparison of core loss functions with single run and per-architecture reporting."""
+        """Run comparison of core loss functions with multiple runs and statistical analysis."""
         import time as time_module
         start_time = time_module.time()
         
         print("=" * 80)
         print(f"TABULAR SURVIVAL ANALYSIS COMPARISON - {self.dataset_config.name.upper()}")
         print("Core Loss Functions: NLL, CPL, CPL(ipcw), CPL(ipcw batch)")
+        print(f"Multiple Runs: {self.num_runs} independent runs per configuration")
         print("=" * 80)
         
         # Load data
@@ -443,19 +447,36 @@ class TabularBenchmarkRunner:
             print(f"TESTING {loss_type.upper()}")
             print(f"{'='*50}")
             
-            # Define grids
-            lr_grid = [0.01, 0.005, 0.001, 0.0005]
+            # Define grids (streamlined for efficiency)
+            lr_grid = [0.01, 0.005, 0.001]  
             hd_grid = [64, 128]
             temp_grid = [0.5, 1.0, 2.0] if (loss_type != 'nll') else [1.0]
                 
             for hd in hd_grid:
+                print(f"\n--- {loss_type.upper()} (hd{hd}) ---")
+                
+                # Test each hyperparameter combination with multiple runs
+                print(f"Testing {len(lr_grid)} × {len(temp_grid)} = {len(lr_grid) * len(temp_grid)} hyperparameter combinations with {self.num_runs} runs each")
+                
                 best_val_uno = -1.0
-                best = None
-                best_training = None
-                best_model = None
+                best_hparams = None
+                best_eval_results = []
+                best_training_results = []
                 
                 for lr in lr_grid:
-                        for temp in temp_grid:
+                    for temp in temp_grid:
+                        print(f"\n  Testing lr={lr}, temp={temp} ({self.num_runs} runs)...")
+                        
+                        # Run multiple times for this hyperparameter combination
+                        val_uno_scores = []
+                        test_eval_results = []
+                        test_training_results = []
+                        
+                        for run_idx in range(self.num_runs):
+                            # Set different random seed for each run
+                            run_seed = (self.random_seed + run_idx) if self.random_seed is not None else (42 + run_idx)
+                            self._set_random_seed(run_seed)
+                            
                             # Update trainer settings
                             self.trainer.learning_rate = lr
                             self.trainer.hidden_dim = hd
@@ -464,30 +485,57 @@ class TabularBenchmarkRunner:
                             training_results = self.trainer.train_model(
                                 model, dataloader_train, dataloader_val, loss_type, temp
                             )
+                            
                             # Evaluate on validation for selection
                             val_eval = self.evaluator.evaluate_model(model, dataloader_val)
                             val_uno = float(val_eval['uno_cindex'])
-                            if val_uno > best_val_uno:
-                                best_val_uno = val_uno
-                                best = (lr, hd, temp)
-                                best_training = training_results
-                                best_model = model
+                            val_uno_scores.append(val_uno)
+                            
+                            # Also evaluate on test set for final results
+                            test_eval = self.evaluator.evaluate_model(model, dataloader_test)
+                            test_eval_results.append(test_eval)
+                            test_training_results.append(training_results)
+                            
+                            print(f"    Run {run_idx+1}/{self.num_runs}: Val Uno C={val_uno:.4f}, Test Uno C={test_eval['uno_cindex']:.4f}")
+                        
+                        # Calculate mean performance for this hyperparameter combination
+                        mean_val_uno = np.mean(val_uno_scores)
+                        std_val_uno = np.std(val_uno_scores)
+                        print(f"    Mean val Uno C: {mean_val_uno:.4f} ± {std_val_uno:.4f}")
+                        
+                        # Select best hyperparameters based on validation performance
+                        if mean_val_uno > best_val_uno:
+                            best_val_uno = mean_val_uno
+                            best_hparams = (lr, hd, temp)
+                            best_eval_results = test_eval_results
+                            best_training_results = test_training_results
                 
-                # Evaluate best for this hidden size on test
-                eval_results = self.evaluator.evaluate_model(best_model, dataloader_test)
+                print(f"\nBest hyperparams: lr={best_hparams[0]}, temp={best_hparams[2]} (mean val Uno C={best_val_uno:.4f})")
+                
+                # Aggregate results from best hyperparameter combination
+                aggregated_results = self._aggregate_multiple_runs(best_eval_results, best_training_results)
+                
                 loss_key = f"{loss_type}_hd{hd}"
                 results[loss_key] = {
-                    'training': best_training,
-                    'evaluation': eval_results,
-                    'best_hparams': {'lr': best[0], 'hidden_dim': best[1], 'temperature': best[2]}
+                    'training': aggregated_results['training'],
+                    'evaluation': aggregated_results['evaluation'],
+                    'best_hparams': {'lr': best_hparams[0], 'hidden_dim': best_hparams[1], 'temperature': best_hparams[2]},
+                    'individual_runs': best_eval_results,
+                    'num_runs': self.num_runs
                 }
                 
-                print(f"[{loss_key}] Results: Harrell C={eval_results['harrell_cindex']:.4f}, "
-                      f"Uno C={eval_results['uno_cindex']:.4f}, "
-                      f"Cum AUC={eval_results['cumulative_auc']:.4f}, "
-                      f"Inc AUC={eval_results['incident_auc']:.4f}, "
-                      f"Brier={eval_results['brier_score']:.4f}")
+                # Print aggregated results
+                eval_stats = aggregated_results['evaluation']
+                print(f"\n[{loss_key}] Final Results (n={self.num_runs}):")
+                print(f"  Harrell C: {eval_stats['harrell_cindex_mean']:.4f} ± {eval_stats['harrell_cindex_std']:.4f}")
+                print(f"  Uno C: {eval_stats['uno_cindex_mean']:.4f} ± {eval_stats['uno_cindex_std']:.4f}")
+                print(f"  Cum AUC: {eval_stats['cumulative_auc_mean']:.4f} ± {eval_stats['cumulative_auc_std']:.4f}")
+                print(f"  Inc AUC: {eval_stats['incident_auc_mean']:.4f} ± {eval_stats['incident_auc_std']:.4f}")
+                print(f"  Brier: {eval_stats['brier_score_mean']:.4f} ± {eval_stats['brier_score_std']:.4f}")
             
+        # Perform statistical analysis
+        self._perform_statistical_analysis(results)
+        
         # Analyze results with visualization
         self._analyze_results(results)
         
@@ -511,6 +559,7 @@ class TabularBenchmarkRunner:
                 'device': str(self.device),
                 'mixed_precision': self.device.type == 'cuda',
                 'core_loss_types': self.CORE_LOSS_TYPES,
+                'num_runs': self.num_runs,
                 'execution_time': execution_time
             }
             
@@ -532,15 +581,107 @@ class TabularBenchmarkRunner:
         
         return results
     
+    def _aggregate_multiple_runs(self, eval_results: List[Dict], training_results: List[Dict]) -> Dict[str, Dict]:
+        """Aggregate results from multiple runs with mean and standard deviation."""
+        # Aggregate evaluation metrics
+        eval_metrics = ['harrell_cindex', 'uno_cindex', 'cumulative_auc', 'incident_auc', 'brier_score']
+        aggregated_eval = {}
+        
+        for metric in eval_metrics:
+            values = [result[metric] for result in eval_results if not np.isnan(result[metric])]
+            if values:
+                aggregated_eval[f'{metric}_mean'] = np.mean(values)
+                aggregated_eval[f'{metric}_std'] = np.std(values)
+                aggregated_eval[f'{metric}_values'] = values
+            else:
+                aggregated_eval[f'{metric}_mean'] = 0.0
+                aggregated_eval[f'{metric}_std'] = 0.0
+                aggregated_eval[f'{metric}_values'] = []
+        
+        # Aggregate training metrics
+        train_losses = [result['train_losses'] for result in training_results]
+        val_losses = [result['val_losses'] for result in training_results]
+        
+        # Average training curves
+        max_epochs = max(len(losses) for losses in train_losses)
+        avg_train_losses = []
+        avg_val_losses = []
+        
+        for epoch in range(max_epochs):
+            epoch_train_losses = [losses[epoch] for losses in train_losses if epoch < len(losses)]
+            epoch_val_losses = [losses[epoch] for losses in val_losses if epoch < len(losses)]
+            
+            if epoch_train_losses:
+                avg_train_losses.append(np.mean(epoch_train_losses))
+            if epoch_val_losses:
+                avg_val_losses.append(np.mean(epoch_val_losses))
+        
+        aggregated_training = {
+            'train_losses': avg_train_losses,
+            'val_losses': avg_val_losses,
+            'weight_evolution': []  # Not used in this simplified version
+        }
+        
+        return {
+            'evaluation': aggregated_eval,
+            'training': aggregated_training
+        }
+    
+    def _perform_statistical_analysis(self, results: Dict[str, Dict]) -> None:
+        """Perform statistical significance testing between methods."""
+        print(f"\n{'='*80}")
+        print("STATISTICAL SIGNIFICANCE ANALYSIS")
+        print(f"{'='*80}")
+        
+        # Extract Uno C-index values for statistical testing
+        method_data = {}
+        for loss_key, result in results.items():
+            if 'individual_runs' in result:
+                uno_values = []
+                for run_result in result['individual_runs']:
+                    if not np.isnan(run_result['uno_cindex']):
+                        uno_values.append(run_result['uno_cindex'])
+                if uno_values:
+                    method_data[loss_key] = uno_values
+        
+        if len(method_data) < 2:
+            print("Insufficient data for statistical analysis")
+            return
+        
+        # Perform pairwise comparisons
+        methods = list(method_data.keys())
+        print(f"\nPairwise t-tests (Uno C-index):")
+        print(f"{'Method 1':<20} {'Method 2':<20} {'t-statistic':<12} {'p-value':<10} {'Significant'}")
+        print("-" * 80)
+        
+        significant_pairs = []
+        for i in range(len(methods)):
+            for j in range(i+1, len(methods)):
+                method1, method2 = methods[i], methods[j]
+                data1, data2 = method_data[method1], method_data[method2]
+                
+                if len(data1) > 1 and len(data2) > 1:
+                    t_stat, p_value = stats.ttest_ind(data1, data2)
+                    significant = "Yes" if p_value < 0.05 else "No"
+                    if p_value < 0.05:
+                        significant_pairs.append((method1, method2, p_value))
+                    
+                    print(f"{method1:<20} {method2:<20} {t_stat:<12.4f} {p_value:<10.4f} {significant}")
+        
+        if significant_pairs:
+            print(f"\nSignificant differences found in {len(significant_pairs)} pairs (p < 0.05)")
+        else:
+            print("\nNo significant differences found between methods (p >= 0.05)")
+    
     def _analyze_results(self, results: Dict[str, Dict]) -> None:
         """Analyze results and create comprehensive visualizations."""
         print(f"\n{'='*80}")
         print("COMPREHENSIVE RESULTS ANALYSIS")
         print(f"{'='*80}")
         
-        # Print comprehensive summary table
-        print(f"\n{'Method':<30} {'Harrell C':<10} {'Uno C':<10} {'Cum AUC':<10} {'Inc AUC':<10} {'Brier':<10}")
-        print("-" * 90)
+        # Print comprehensive summary table with mean ± std
+        print(f"\n{'Method':<30} {'Harrell C':<15} {'Uno C':<15} {'Cum AUC':<15} {'Inc AUC':<15} {'Brier':<15}")
+        print("-" * 120)
         
         # Method name mapping for display
         method_names = {
@@ -562,13 +703,22 @@ class TabularBenchmarkRunner:
             else:
                 method_name = method_names.get(loss_key, loss_key.upper())
             
-            harrell = eval_result['harrell_cindex']
-            uno = eval_result['uno_cindex']
-            cumulative_auc = eval_result['cumulative_auc']
-            incident_auc = eval_result['incident_auc']
-            brier = eval_result['brier_score']
+            # Use mean ± std format if available, otherwise single values
+            if 'harrell_cindex_mean' in eval_result:
+                harrell = f"{eval_result['harrell_cindex_mean']:.4f}±{eval_result['harrell_cindex_std']:.4f}"
+                uno = f"{eval_result['uno_cindex_mean']:.4f}±{eval_result['uno_cindex_std']:.4f}"
+                cumulative_auc = f"{eval_result['cumulative_auc_mean']:.4f}±{eval_result['cumulative_auc_std']:.4f}"
+                incident_auc = f"{eval_result['incident_auc_mean']:.4f}±{eval_result['incident_auc_std']:.4f}"
+                brier = f"{eval_result['brier_score_mean']:.4f}±{eval_result['brier_score_std']:.4f}"
+            else:
+                # Fallback for single runs
+                harrell = f"{eval_result['harrell_cindex']:.4f}"
+                uno = f"{eval_result['uno_cindex']:.4f}"
+                cumulative_auc = f"{eval_result['cumulative_auc']:.4f}"
+                incident_auc = f"{eval_result['incident_auc']:.4f}"
+                brier = f"{eval_result['brier_score']:.4f}"
             
-            print(f"{method_name:<30} {harrell:<10.4f} {uno:<10.4f} {cumulative_auc:<10.4f} {incident_auc:<10.4f} {brier:<10.4f}")
+            print(f"{method_name:<30} {harrell:<15} {uno:<15} {cumulative_auc:<15} {incident_auc:<15} {brier:<15}")
         
         # Create comprehensive visualizations
         self._create_comprehensive_plots(results)
@@ -632,10 +782,36 @@ class TabularBenchmarkRunner:
         methods = list(base_methods.keys())
         method_labels = [method_names.get(m, m.upper()) for m in methods]
         
-        harrell_64 = [base_methods[m]['hd64']['harrell_cindex'] if base_methods[m]['hd64'] else 0 for m in methods]
-        uno_64 = [base_methods[m]['hd64']['uno_cindex'] if base_methods[m]['hd64'] else 0 for m in methods]
-        harrell_128 = [base_methods[m]['hd128']['harrell_cindex'] if base_methods[m]['hd128'] else 0 for m in methods]
-        uno_128 = [base_methods[m]['hd128']['uno_cindex'] if base_methods[m]['hd128'] else 0 for m in methods]
+        # Extract mean values for plotting
+        harrell_64 = []
+        uno_64 = []
+        harrell_128 = []
+        uno_128 = []
+        
+        for m in methods:
+            if base_methods[m]['hd64']:
+                eval_data = base_methods[m]['hd64']
+                if 'harrell_cindex_mean' in eval_data:
+                    harrell_64.append(eval_data['harrell_cindex_mean'])
+                    uno_64.append(eval_data['uno_cindex_mean'])
+                else:
+                    harrell_64.append(eval_data['harrell_cindex'])
+                    uno_64.append(eval_data['uno_cindex'])
+            else:
+                harrell_64.append(0)
+                uno_64.append(0)
+                
+            if base_methods[m]['hd128']:
+                eval_data = base_methods[m]['hd128']
+                if 'harrell_cindex_mean' in eval_data:
+                    harrell_128.append(eval_data['harrell_cindex_mean'])
+                    uno_128.append(eval_data['uno_cindex_mean'])
+                else:
+                    harrell_128.append(eval_data['harrell_cindex'])
+                    uno_128.append(eval_data['uno_cindex'])
+            else:
+                harrell_128.append(0)
+                uno_128.append(0)
         
         x = np.arange(len(methods))
         width = 0.2
@@ -677,15 +853,42 @@ class TabularBenchmarkRunner:
         method_labels = [method_names.get(m, m.upper()) for m in methods]
         
         # Use hd128 results for this plot
-        harrell_scores = [base_methods[m]['hd128']['harrell_cindex'] if base_methods[m]['hd128'] else 0 for m in methods]
-        uno_scores = [base_methods[m]['hd128']['uno_cindex'] if base_methods[m]['hd128'] else 0 for m in methods]
-        cumulative_auc_scores = [base_methods[m]['hd128']['cumulative_auc'] if base_methods[m]['hd128'] else 0 for m in methods]
-        incident_auc_scores = [base_methods[m]['hd128']['incident_auc'] if base_methods[m]['hd128'] else 0 for m in methods]
+        harrell_scores = []
+        uno_scores = []
+        cumulative_auc_scores = []
+        incident_auc_scores = []
+        
+        for m in methods:
+            if base_methods[m]['hd128']:
+                eval_data = base_methods[m]['hd128']
+                if 'harrell_cindex_mean' in eval_data:
+                    harrell_scores.append(eval_data['harrell_cindex_mean'])
+                    uno_scores.append(eval_data['uno_cindex_mean'])
+                    cumulative_auc_scores.append(eval_data['cumulative_auc_mean'])
+                    incident_auc_scores.append(eval_data['incident_auc_mean'])
+                else:
+                    harrell_scores.append(eval_data['harrell_cindex'])
+                    uno_scores.append(eval_data['uno_cindex'])
+                    cumulative_auc_scores.append(eval_data['cumulative_auc'])
+                    incident_auc_scores.append(eval_data['incident_auc'])
+            else:
+                harrell_scores.append(0)
+                uno_scores.append(0)
+                cumulative_auc_scores.append(0)
+                incident_auc_scores.append(0)
         
         # For Brier score, invert and normalize (lower is better)
         brier_scores = []
         for m in methods:
-            brier = base_methods[m]['hd128']['brier_score'] if base_methods[m]['hd128'] else 0
+            if base_methods[m]['hd128']:
+                eval_data = base_methods[m]['hd128']
+                if 'brier_score_mean' in eval_data:
+                    brier = eval_data['brier_score_mean']
+                else:
+                    brier = eval_data['brier_score']
+            else:
+                brier = 0
+                
             if not np.isnan(brier):
                 brier_scores.append(max(0, 1 - brier))
             else:
@@ -752,8 +955,24 @@ class TabularBenchmarkRunner:
         hd64_scores = []
         hd128_scores = []
         for m in methods:
-            hd64_score = base_methods[m]['hd64']['uno_cindex'] if base_methods[m]['hd64'] else 0
-            hd128_score = base_methods[m]['hd128']['uno_cindex'] if base_methods[m]['hd128'] else 0
+            if base_methods[m]['hd64']:
+                eval_data = base_methods[m]['hd64']
+                if 'uno_cindex_mean' in eval_data:
+                    hd64_score = eval_data['uno_cindex_mean']
+                else:
+                    hd64_score = eval_data['uno_cindex']
+            else:
+                hd64_score = 0
+                
+            if base_methods[m]['hd128']:
+                eval_data = base_methods[m]['hd128']
+                if 'uno_cindex_mean' in eval_data:
+                    hd128_score = eval_data['uno_cindex_mean']
+                else:
+                    hd128_score = eval_data['uno_cindex']
+            else:
+                hd128_score = 0
+                
             hd64_scores.append(hd64_score)
             hd128_scores.append(hd128_score)
         
@@ -808,16 +1027,23 @@ class TabularBenchmarkRunner:
                 hparams = result['best_hparams']
                 training = result['training']
                 
+                # Use mean values if available (multiple runs), otherwise single values
+                harrell_c = eval_result.get('harrell_cindex_mean', eval_result.get('harrell_cindex', 0.0))
+                uno_c = eval_result.get('uno_cindex_mean', eval_result.get('uno_cindex', 0.0))
+                cum_auc = eval_result.get('cumulative_auc_mean', eval_result.get('cumulative_auc', 0.0))
+                inc_auc = eval_result.get('incident_auc_mean', eval_result.get('incident_auc', 0.0))
+                brier = eval_result.get('brier_score_mean', eval_result.get('brier_score', 0.0))
+                
                 writer.writerow([
                     base_method,
                     hidden_dim,
                     hparams['lr'],
                     hparams['temperature'],
-                    eval_result['harrell_cindex'],
-                    eval_result['uno_cindex'],
-                    eval_result['cumulative_auc'],
-                    eval_result['incident_auc'],
-                    eval_result['brier_score'],
+                    harrell_c,
+                    uno_c,
+                    cum_auc,
+                    inc_auc,
+                    brier,
                     training['train_losses'][-1] if training['train_losses'] else 0.0,
                     training['val_losses'][-1] if training['val_losses'] else 0.0,
                     len(training['train_losses'])
@@ -828,14 +1054,15 @@ class TabularBenchmarkRunner:
 
 def run_single_dataset(
     dataset_name: str,
-    epochs: int = 50,
+    epochs: int = 15,
     learning_rate: float = 5e-2,
     weight_decay: float = 1e-4,
     hidden_dim: int = 128,
     temperature: float = 1.0,
     output_dir: str = "results",
     seed: int = None,
-    num_features: int = None
+    num_features: int = None,
+    num_runs: int = 5
 ) -> Dict[str, Dict]:
     """Run benchmark on a single dataset."""
     runner = TabularBenchmarkRunner(
@@ -848,19 +1075,21 @@ def run_single_dataset(
         output_dir=output_dir,
         save_results=True,
         random_seed=seed,
-        num_features=num_features
+        num_features=num_features,
+        num_runs=num_runs
     )
     return runner.run_comparison()
 
 
 def run_all_datasets(
-    epochs: int = 50,
+    epochs: int = 15,
     learning_rate: float = 5e-2,
     weight_decay: float = 1e-4,
     hidden_dim: int = 128,
     temperature: float = 1.0,
     output_dir: str = "results",
-    seed: int = None
+    seed: int = None,
+    num_runs: int = 5
 ) -> Dict[str, Dict[str, Dict]]:
     """Run benchmark across all tabular datasets."""
     all_results = {}
@@ -879,7 +1108,8 @@ def run_all_datasets(
                 hidden_dim=hidden_dim,
                 temperature=temperature,
                 output_dir=output_dir,
-                seed=seed
+                seed=seed,
+                num_runs=num_runs
             )
             all_results[dataset] = results
         except Exception as e:
@@ -893,7 +1123,7 @@ def main():
     parser = argparse.ArgumentParser(description="Tabular Survival Analysis Benchmark")
     parser.add_argument('--dataset', choices=TabularBenchmarkRunner.TABULAR_DATASETS + ['all'], 
                        default='gbsg2', help='Dataset name or "all" for all datasets')
-    parser.add_argument('--epochs', type=int, default=100, help='Number of training epochs')
+    parser.add_argument('--epochs', type=int, default=15, help='Number of training epochs')
     parser.add_argument('--lr', type=float, default=5e-2, help='Learning rate')
     parser.add_argument('--weight-decay', type=float, default=1e-4, help='Weight decay')
     parser.add_argument('--hidden-dim', type=int, default=128, help='Hidden layer width')
@@ -901,6 +1131,7 @@ def main():
     parser.add_argument('--output-dir', type=str, default='results', help='Output directory')
     parser.add_argument('--seed', type=int, default=42, help='Random seed')
     parser.add_argument('--num-features', type=int, default=None, help='Input features (auto-detect if omitted)')
+    parser.add_argument('--num-runs', type=int, default=5, help='Number of independent runs per configuration')
     
     args = parser.parse_args()
     
@@ -912,7 +1143,8 @@ def main():
             hidden_dim=args.hidden_dim,
             temperature=args.temperature,
             output_dir=args.output_dir,
-            seed=args.seed
+            seed=args.seed,
+            num_runs=args.num_runs
         )
         
         print(f"\n{'='*100}")
@@ -939,7 +1171,8 @@ def main():
             temperature=args.temperature,
             output_dir=args.output_dir,
             seed=args.seed,
-            num_features=args.num_features
+            num_features=args.num_features,
+            num_runs=args.num_runs
         )
 
 
