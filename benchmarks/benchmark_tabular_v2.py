@@ -444,9 +444,9 @@ class TabularBenchmarkRunner:
             print(f"{'='*50}")
             
             # Define grids
-            lr_grid = [0.05, 0.001, 0.005, 0.0005]
+            lr_grid = [0.01, 0.005, 0.001, 0.0005]
             hd_grid = [64, 128]
-            temp_grid = [0.25, 0.5, 1.0] if (loss_type != 'nll') else [1.0]
+            temp_grid = [0.5, 1.0, 2.0] if (loss_type != 'nll') else [1.0]
                 
             for hd in hd_grid:
                 best_val_uno = -1.0
@@ -899,7 +899,7 @@ def main():
     parser.add_argument('--hidden-dim', type=int, default=128, help='Hidden layer width')
     parser.add_argument('--temperature', type=float, default=1.0, help='Temperature for CPL losses')
     parser.add_argument('--output-dir', type=str, default='results', help='Output directory')
-    parser.add_argument('--seed', type=int, default=None, help='Random seed')
+    parser.add_argument('--seed', type=int, default=42, help='Random seed')
     parser.add_argument('--num-features', type=int, default=None, help='Input features (auto-detect if omitted)')
     
     args = parser.parse_args()
