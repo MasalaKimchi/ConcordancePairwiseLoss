@@ -449,7 +449,7 @@ class TabularBenchmarkRunner:
             
             # Define grids (streamlined for efficiency)
             lr_grid = [0.01, 0.005, 0.001]  
-            hd_grid = [64, 128]
+            hd_grid = [32, 64, 128]
             temp_grid = [0.5, 1.0, 2.0] if (loss_type != 'nll') else [1.0]
                 
             for hd in hd_grid:
