@@ -28,7 +28,7 @@ for loss_type in "${loss_types[@]}"; do
     # Run the experiment
     python train_torchsurv_mnist_enhanced.py \
         --loss-type "$loss_type" \
-        --batch-size 64 \
+        --batch-size 256 \
         --epochs 5 \
         --limit-train-batches 0.1 \
         --output-dir results
