@@ -356,7 +356,7 @@ class TabularBenchmarkRunner:
         save_results: bool = True,
         random_seed: int = None,
         num_features: Optional[int] = None,
-        num_runs: int = 5
+        num_runs: int = 10
     ):
         if dataset_name not in self.TABULAR_DATASETS:
             raise ValueError(f"Dataset {dataset_name} not in tabular datasets: {self.TABULAR_DATASETS}")
@@ -1062,7 +1062,7 @@ def run_single_dataset(
     output_dir: str = "results",
     seed: int = None,
     num_features: int = None,
-    num_runs: int = 5
+    num_runs: int = 10
 ) -> Dict[str, Dict]:
     """Run benchmark on a single dataset."""
     runner = TabularBenchmarkRunner(
@@ -1089,7 +1089,7 @@ def run_all_datasets(
     temperature: float = 1.0,
     output_dir: str = "results",
     seed: int = None,
-    num_runs: int = 5
+    num_runs: int = 10
 ) -> Dict[str, Dict[str, Dict]]:
     """Run benchmark across all tabular datasets."""
     all_results = {}
@@ -1131,7 +1131,7 @@ def main():
     parser.add_argument('--output-dir', type=str, default='results', help='Output directory')
     parser.add_argument('--seed', type=int, default=42, help='Random seed')
     parser.add_argument('--num-features', type=int, default=None, help='Input features (auto-detect if omitted)')
-    parser.add_argument('--num-runs', type=int, default=5, help='Number of independent runs per configuration')
+    parser.add_argument('--num-runs', type=int, default=10, help='Number of independent runs per configuration')
     
     args = parser.parse_args()
     
