@@ -1,3 +1,10 @@
+"""
+MIMIC-IV Image Dataset Module
+
+This module provides PyTorch dataset classes for MIMIC-IV chest X-ray images
+with survival analysis targets.
+"""
+
 import os
 from typing import Tuple, Optional, Callable
 import pandas as pd
@@ -9,7 +16,10 @@ import torchvision.transforms as transforms
 
 class MIMICImageDataset(Dataset):
     """
-    Dataset class for MIMIC-IV Chest X-ray images with survival analysis targets.
+    PyTorch Dataset for MIMIC-IV Chest X-ray images with survival analysis targets.
+    
+    This dataset loads chest X-ray images from MIMIC-IV and provides them with
+    corresponding survival analysis targets (event indicators and survival times).
     """
     
     def __init__(
@@ -58,10 +68,20 @@ class MIMICImageDataset(Dataset):
         if missing_cols:
             raise ValueError(f"Missing required columns: {missing_cols}")
     
-    def __len__(self):
+    def __len__(self) -> int:
+        """Return the number of samples in the dataset."""
         return len(self.df)
     
-    def __getitem__(self, idx):
+    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+        """
+        Get a sample from the dataset.
+        
+        Args:
+            idx: Index of the sample to retrieve
+            
+        Returns:
+            Tuple of (image_tensor, (event_tensor, time_tensor))
+        """
         sample = self.df.iloc[idx]
         
         # Load image
@@ -94,44 +114,28 @@ class MIMICImageDataset(Dataset):
         events = torch.tensor(self.df[self.event_col].values, dtype=torch.bool)
         times = torch.tensor(self.df[self.time_col].values, dtype=torch.float32)
         return events, times
-
-
-def get_efficientnet_transforms(
-    target_size: Tuple[int, int] = (224, 224),
-    is_training: bool = True,
-    mean: Tuple[float, float, float] = (0.485, 0.456, 0.406),
-    std: Tuple[float, float, float] = (0.229, 0.224, 0.225)
-) -> transforms.Compose:
-    """
-    Get EfficientNet-optimized transforms for medical imaging.
     
-    Args:
-        target_size: Target image size (height, width)
-        is_training: Whether to apply training augmentations
-        mean: Normalization mean values (ImageNet default)
-        std: Normalization std values (ImageNet default)
+    def get_event_rate(self) -> float:
+        """
+        Get the event rate (proportion of deaths) in the dataset.
         
-    Returns:
-        Composed transforms
-    """
-    # Base transforms for medical imaging
-    transform_list = [
-        transforms.Resize((int(target_size[0] * 1.1), int(target_size[1] * 1.1))),
-        transforms.CenterCrop(target_size),
-    ]
+        Returns:
+            Event rate as a float between 0 and 1
+        """
+        return self.df[self.event_col].mean()
     
-    # Add training augmentations
-    if is_training:
-        transform_list.extend([
-            transforms.RandomHorizontalFlip(p=0.5),
-            transforms.RandomRotation(degrees=10),
-            transforms.ColorJitter(brightness=0.1, contrast=0.1),
-        ])
-    
-    # Final transforms
-    transform_list.extend([
-        transforms.ToTensor(),
-        transforms.Normalize(mean=mean, std=std)
-    ])
-    
-    return transforms.Compose(transform_list)
+    def get_survival_stats(self) -> dict:
+        """
+        Get survival statistics for the dataset.
+        
+        Returns:
+            Dictionary containing survival statistics
+        """
+        return {
+            'n_samples': len(self.df),
+            'event_rate': self.df[self.event_col].mean(),
+            'mean_survival_time': self.df[self.time_col].mean(),
+            'median_survival_time': self.df[self.time_col].median(),
+            'min_survival_time': self.df[self.time_col].min(),
+            'max_survival_time': self.df[self.time_col].max()
+        }

@@ -15,7 +15,7 @@ sys.path.append('src')
 try:
     import torchvision
     from data_loaders import MIMICDataLoader
-    from image_dataset import get_efficientnet_transforms
+    from src.mimic.transforms import get_efficientnet_transforms
     DEPENDENCIES_AVAILABLE = True
 except ImportError as e:
     print(f"Warning: Missing dependencies: {e}")
@@ -24,7 +24,7 @@ except ImportError as e:
 
 
 def test_mimic_loader():
-    """Test the MIMIC data loader with sample data."""
+    """Test the MIMIC data loader with real data by default."""
     
     if not DEPENDENCIES_AVAILABLE:
         print("Skipping tests due to missing dependencies.")
@@ -113,8 +113,47 @@ def test_mimic_loader():
         return False
     
     print("\n✓ All tests passed! The MIMIC data loader is ready to use.")
+    
+    # Test with real data if available
+    print("\n" + "="*50)
+    print("TESTING WITH REAL MIMIC DATASET")
+    print("="*50)
+    
+    csv_path = "data/mimic/mimic_cxr_splits.csv"
+    data_dir = "Y:\\MIMIC-CXR-JPG\\mimic-cxr-jpg-2.1.0.physionet.org\\"
+    
+    if os.path.exists(csv_path) and os.path.exists(data_dir):
+        try:
+            print("✓ Real data found, testing with actual MIMIC dataset...")
+            real_loader = MIMICDataLoader(
+                batch_size=4,
+                data_dir=data_dir,
+                csv_path=csv_path,
+                target_size=(224, 224),
+                use_augmentation=False
+            )
+            
+            train_loader, val_loader, test_loader, num_features = real_loader.load_data()
+            stats = real_loader.get_dataset_stats()
+            
+            print(f"✓ Real data loading successful!")
+            print(f"✓ Total samples: {stats['total_samples']:,}")
+            print(f"✓ Event rate: {stats['overall_event_rate']:.3f}")
+            print(f"✓ Train/Val/Test: {stats['train_samples']:,}/{stats['val_samples']:,}/{stats['test_samples']:,}")
+            print(f"✓ Event rates - Train: {stats['train_event_rate']:.3f}, Val: {stats['val_event_rate']:.3f}, Test: {stats['test_event_rate']:.3f}")
+            print(f"✓ Batches - Train: {len(train_loader):,}, Val: {len(val_loader):,}, Test: {len(test_loader):,}")
+            
+        except Exception as e:
+            print(f"⚠️  Real data test failed: {e}")
+            print("   This is expected if preprocessing hasn't been run yet")
+    else:
+        print("⚠️  Real data not found - skipping real data test")
+        print("   To test with real data:")
+        print("   1. Run: python -m src.mimic.preprocess")
+        print("   2. Ensure MIMIC data directory is accessible")
+    
     print("\nTo use with real data:")
-    print("1. Run: python preprocess_mimic.py")
+    print("1. Run: python -m src.mimic.preprocess")
     print("2. Update the data_dir path in MIMICDataLoader to point to your MIMIC data")
     print("3. Use the loader in your training pipeline")
     

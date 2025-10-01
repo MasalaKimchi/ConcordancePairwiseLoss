@@ -61,7 +61,24 @@ class BenchmarkEvaluator:
         # Collect all test data for comprehensive evaluation
         with torch.no_grad():
             for batch in dataloader_test:
-                x, (event, time) = batch
+                # Handle different data formats (MONAI vs standard)
+                if isinstance(batch, dict):
+                    # MONAI format: {"image": tensor, "event": tensor, "time": tensor}
+                    x = batch["image"]
+                    event = batch["event"]
+                    time = batch["time"]
+                else:
+                    # Standard format: (image, (event, time))
+                    x, (event, time) = batch
+                
+                # Convert MONAI MetaTensors to regular PyTorch tensors to avoid indexing issues
+                if hasattr(x, 'as_tensor'):
+                    x = x.as_tensor()
+                if hasattr(event, 'as_tensor'):
+                    event = event.as_tensor()
+                if hasattr(time, 'as_tensor'):
+                    time = time.as_tensor()
+                
                 x, event, time = x.to(self.device), event.to(self.device), time.to(self.device)
                 out = model(x)
                 # Support models that optionally return (risk, log_tau)
@@ -78,6 +95,10 @@ class BenchmarkEvaluator:
         log_hz = torch.cat(all_log_hz, dim=0)
         event = torch.cat(all_events, dim=0)
         time = torch.cat(all_times, dim=0)
+        
+        # Ensure correct data types for torchsurv requirements
+        event = event.bool()  # torchsurv requires boolean events
+        time = time.float()   # torchsurv requires float times
         
         # Get IPCW weights for Uno's C-index
         try:

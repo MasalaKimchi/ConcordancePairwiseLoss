@@ -61,7 +61,7 @@ python benchmarks/benchmark_framework_improved.py --dataset gbsg2 --loss-type nl
 ### Available Datasets
 - **Large datasets**: FLChain (7,874), SUPPORT2 (8,873)
 - **Medium datasets**: GBSG2 (686), WHAS500 (500), METABRIC (1,903)
-- **Medical Imaging**: MIMIC-IV Chest X-ray (see [README_MIMIC.md](README_MIMIC.md) for details)
+- **Medical Imaging**: MIMIC-IV Chest X-ray (see [src/mimic/README.md](src/mimic/README.md) for details)
 
 ### Statistical Analysis
 Each benchmark provides professional statistical analysis:
@@ -82,16 +82,16 @@ ConcordancePairwiseLoss/
 │   │   └── dynamic_weighting.py  # Dynamic weighting strategies
 │   ├── abstract_data_loader.py   # Base class for dataset loaders
 │   ├── data_loaders.py           # Implementations of supported datasets
-│   ├── image_dataset.py          # Image dataset utilities for MIMIC
+│   ├── mimic/                    # MIMIC-IV medical imaging module
 │   ├── dataset_configs.py        # Utility for loading dataset metadata
 │   └── flexible_dataset.py       # Dataset utilities
 ├── benchmarks/
 │   ├── benchmark_framework.py      # Legacy benchmark framework
 │   ├── benchmark_framework_improved.py  # Current benchmark framework
 │   └── dataset_configs.json        # Dataset-specific evaluation settings
-├── preprocess_mimic.py           # MIMIC-IV preprocessing script
+├── src/mimic/preprocess.py       # MIMIC-IV preprocessing script
 ├── README.md                     # This file
-└── README_MIMIC.md              # MIMIC-IV specific documentation
+└── src/mimic/README.md          # MIMIC-IV specific documentation
 ```
 
 
