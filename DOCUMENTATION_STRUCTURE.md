@@ -1,7 +1,10 @@
 # Documentation Structure
 
 ## Overview
-The documentation has been reorganized to provide clear, user-focused guidance for both tabular and medical imaging datasets.
+The documentation has been reorganized to provide clear, user-focused guidance for both tabular and medical imaging datasets. All documentation uses consistent terminology for Concordance Pairwise Loss (CPL) variants:
+- **CPL**: Base concordance pairwise loss
+- **CPL (dynamic)**: CPL with IPCW computed dynamically per batch (code: `cpl_ipcw`)
+- **CPL (static)**: CPL with IPCW precomputed from full training set (code: `cpl_ipcw_batch`)
 
 ## Documentation Files
 
@@ -10,12 +13,18 @@ The documentation has been reorganized to provide clear, user-focused guidance f
 - **`src/mimic/README.md`**: Comprehensive MIMIC-IV Chest X-ray integration guide
 - **`src/mimic/USAGE.md`**: Quick start guide for MIMIC-IV usage
 
+### Benchmark Scripts (V2 - Current)
+- **`benchmarks/benchmark_tabular_v2.py`**: Tabular datasets benchmark with comprehensive metrics
+- **`benchmarks/benchmark_MIMIC_v2.py`**: MIMIC-IV imaging benchmark with integrated evaluation
+- **`benchmarks/dataset_configs.json`**: Dataset-specific configurations
+
 ### Code Files
 - **`src/mimic/preprocess.py`**: MIMIC-IV preprocessing script (references DiffSurv approach)
-- **`src/mimic/mimic_data_loader.py`**: MIMICDataLoader class
+- **`src/mimic/preprocess_images.py`**: Image preprocessing for fast training
+- **`src/mimic/preprocessed_data_loader.py`**: Optimized data loader for preprocessed images
+- **`src/mimic/mimic_data_loader.py`**: Standard MIMICDataLoader class
 - **`src/mimic/dataset.py`**: MIMICImageDataset class
 - **`src/mimic/transforms.py`**: Image transform utilities
-- **`benchmarks/dataset_configs.json`**: Updated with MIMIC configuration
 
 ## Key Features
 
@@ -37,13 +46,19 @@ The documentation has been reorganized to provide clear, user-focused guidance f
 ## Quick Reference
 
 ### For Tabular Datasets
-- Use existing `README.md` and benchmark framework
-- All existing functionality remains unchanged
+1. **Setup**: `conda activate concordance-pairwise-loss`
+2. **Run single dataset**: `python benchmarks/benchmark_tabular_v2.py --dataset gbsg2 --epochs 30 --num-runs 10`
+3. **Run all datasets**: `python benchmarks/benchmark_tabular_v2.py --dataset all --epochs 30 --num-runs 10`
+
+**Loss Variants**: NLL, CPL, CPL (dynamic), CPL (static)
 
 ### For Medical Imaging (MIMIC-IV)
 1. **Setup**: `conda activate concordance-pairwise-loss`
-2. **Preprocess**: `python -m src.mimic.preprocess`
-3. **Run**: `python benchmarks/benchmark_framework_improved.py --dataset mimic`
+2. **Preprocess CSV**: `python -m src.mimic.preprocess`
+3. **Preprocess Images**: `python src/mimic/preprocess_images.py --batch-size 2000 --num-workers 12`
+4. **Run Training**: `python benchmarks/benchmark_MIMIC_v2.py --epochs 50 --batch-size 64 --num-runs 3`
+
+**Loss Variants**: NLL, CPL, CPL (dynamic), CPL (static)
 
 ### Documentation Hierarchy
 ```

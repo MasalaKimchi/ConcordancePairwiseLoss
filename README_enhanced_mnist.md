@@ -6,9 +6,9 @@ This enhanced version of the TorchSurv MNIST training script adds support for mu
 
 ### Loss Functions
 - **NLL**: Negative Log-Likelihood (Cox loss) - baseline
-- **CPL**: Concordance Pairwise Loss - your custom loss
-- **CPL (IPCW)**: CPL with Inverse Probability of Censoring Weights computed per batch
-- **CPL (IPCW batch)**: CPL with IPCW weights precomputed from full training set
+- **CPL**: Concordance Pairwise Loss - direct concordance optimization
+- **CPL (dynamic)**: CPL with Inverse Probability of Censoring Weights (IPCW) computed dynamically per batch
+- **CPL (static)**: CPL with IPCW weights precomputed once from the full training set and reused
 
 ### Configurable Parameters
 - **Batch sizes**: 32, 64, 128, 256 (configurable)
@@ -29,10 +29,13 @@ This enhanced version of the TorchSurv MNIST training script adds support for mu
 # Run with default parameters (NLL, batch_size=64, epochs=5)
 python train_torchsurv_mnist_enhanced.py
 
-# Run with specific parameters
+# Run with specific parameters (CPL)
 python train_torchsurv_mnist_enhanced.py --loss-type cpl --batch-size 128 --epochs 5 --temperature 1.0
 
-# Run with CPL IPCW batch variant
+# Run with CPL (dynamic) - IPCW computed per batch
+python train_torchsurv_mnist_enhanced.py --loss-type cpl_ipcw --batch-size 64 --epochs 5
+
+# Run with CPL (static) - IPCW precomputed from full training set
 python train_torchsurv_mnist_enhanced.py --loss-type cpl_ipcw_batch --batch-size 64 --epochs 5
 ```
 

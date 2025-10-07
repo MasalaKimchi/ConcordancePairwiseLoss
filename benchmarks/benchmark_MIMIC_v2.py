@@ -50,7 +50,7 @@ sys.path.append(os.path.dirname(__file__))
 
 # Import MIMIC components
 from mimic.util import MIMICBenchmarkRunner
-from mimic.preprocessed_data_loader import PreprocessedMIMICDataLoader, OptimizedPreprocessedMIMICDataLoader
+from mimic.preprocessed_data_loader import OptimizedPreprocessedMIMICDataLoader
 
 # Import DatasetConfig
 from dataset_configs import DatasetConfig
@@ -175,27 +175,18 @@ class ComprehensiveMIMICEvaluator:
         results['cumulative_auc'] = cumulative_auc.item()
         print(f"    Cumulative AUC: {cumulative_auc.item():.6f}")
         
-        # 4. Incident AUC at specified time point (same as evaluate_saved_models.py)
-        # Pass scalar tensor, but torchsurv returns a 1D tensor
+        # 4. Incident AUC at specified time point
         new_time_cpu = torch.tensor(self.dataset_config.auc_time)
         incident_auc_result = auc(log_hz_cpu, event_cpu, time_cpu, new_time=new_time_cpu)
-        # incident_auc_result is a 1D tensor with one element, use .item() to extract
         results['incident_auc'] = incident_auc_result.item()
         print(f"    Incident AUC ({self.dataset_config.auc_time:.0f} days): {results['incident_auc']:.6f}")
         
-        # 5. Brier Score at specified time point (with fix from evaluate_saved_models.py)
-        # Convert log hazards to survival probabilities
-        # S(t) = exp(-H(t)) where H(t) = exp(log_hz) * t for exponential model
-        # For simplicity, use sigmoid transformation to get probabilities
-        survival_probs_1d = torch.sigmoid(-log_hz_cpu)  # Higher risk -> lower survival probability
-        
-        # BrierScore requires 2D input: (n_samples, n_times)
-        # For single time point, we need to unsqueeze to (n_samples, 1)
-        survival_probs_cpu = survival_probs_1d.unsqueeze(1)  # Shape: (n_samples, 1)
+        # 5. Brier Score
+        survival_probs_1d = torch.sigmoid(-log_hz_cpu) 
+        survival_probs_cpu = survival_probs_1d.unsqueeze(1)  
         
         new_time_cpu = torch.tensor(self.dataset_config.auc_time)  # Scalar tensor
         brier_score_result = brier(survival_probs_cpu, event_cpu, time_cpu, new_time=new_time_cpu)
-        # brier_score_result is a 1D tensor with one element
         results['brier_score'] = brier_score_result.item()
         print(f"    Brier Score: {results['brier_score']:.6f}")
         
@@ -253,31 +244,18 @@ class PreprocessedMIMICBenchmarkRunnerV2(MIMICBenchmarkRunner):
         # Load preprocessed data
         use_augmentation = getattr(args, 'enable_augmentation', False)
         
-        # Try MONAI optimized loader first, fallback to standard
-        try:
-            from monai.utils import set_determinism
-            data_loader = OptimizedPreprocessedMIMICDataLoader(
-                batch_size=self.batch_size,
-                data_dir=self.data_dir,
-                csv_path=self.csv_path,
-                use_augmentation=use_augmentation,
-                cache_rate=0.4,  # Cache 40% of preprocessed data
-                num_workers=12,
-                pin_memory=True,
-                data_fraction=self.data_fraction
-            )
-            print("Using MONAI optimized data loader for preprocessed images")
-        except ImportError:
-            data_loader = PreprocessedMIMICDataLoader(
-                batch_size=self.batch_size,
-                data_dir=self.data_dir,
-                csv_path=self.csv_path,
-                use_augmentation=use_augmentation,
-                num_workers=12,
-                pin_memory=True,
-                data_fraction=self.data_fraction
-            )
-            print("Using standard data loader for preprocessed images")
+        # Use MONAI optimized data loader for preprocessed images
+        data_loader = OptimizedPreprocessedMIMICDataLoader(
+            batch_size=self.batch_size,
+            data_dir=self.data_dir,
+            csv_path=self.csv_path,
+            use_augmentation=use_augmentation,
+            cache_rate=0.4,  # Cache 40% of preprocessed data
+            num_workers=12,
+            pin_memory=True,
+            data_fraction=self.data_fraction
+        )
+        print("Using MONAI optimized data loader for preprocessed images")
         
         dataloader_train, dataloader_val, dataloader_test, num_features = data_loader.load_data()
         

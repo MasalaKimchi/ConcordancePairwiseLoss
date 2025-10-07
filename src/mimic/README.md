@@ -10,8 +10,21 @@ The MIMIC-IV Chest X-ray integration provides a streamlined workflow for surviva
 - ✅ **Preprocessed Pipeline**: Fast training with pre-converted RGB images
 - ✅ **Comprehensive Metrics**: Harrell's C, Uno's C, Cumulative AUC, Incident AUC, Brier Score
 - ✅ **Integrated Workflow**: Training + evaluation in a single run
-- ✅ **Multiple Loss Functions**: NLL, CPL, CPL(ipcw), CPL(ipcw batch)
+- ✅ **Multiple Loss Functions**: NLL, CPL, CPL (dynamic), CPL (static)
 - ✅ **Statistical Robustness**: Multiple independent runs per configuration
+
+### Loss Function Variants
+
+| **Documentation Name** | **Code Name** | **Description** |
+|------------------------|---------------|-----------------|
+| NLL | `nll` | Cox proportional hazards loss |
+| CPL | `cpl` | Base concordance pairwise loss |
+| CPL (dynamic) | `cpl_ipcw` | IPCW computed dynamically per batch |
+| CPL (static) | `cpl_ipcw_batch` | IPCW precomputed once from training set |
+
+**Key Difference**:
+- **CPL (dynamic)**: IPCW weights recalculated for each batch during training
+- **CPL (static)**: IPCW weights computed once from full training set and reused
 
 ### Available Benchmarks
 
@@ -44,7 +57,7 @@ The MIMIC-IV Chest X-ray integration provides a streamlined workflow for surviva
 
 🎯 STEP 3: Train + Evaluate (Run as needed)
    ├─ Command: python benchmarks/benchmark_MIMIC_v2.py --epochs 50 --batch-size 64 --num-runs 3
-   ├─ Process: Train 4 loss functions + Comprehensive evaluation
+   ├─ Process: Train 4 loss variants [NLL, CPL, CPL (dynamic), CPL (static)] + Comprehensive evaluation
    └─ Output: results/models/ + results/comprehensive_evaluation/
 
 ┌─────────────────────────────────────────────────────────────────────────┐
@@ -91,11 +104,8 @@ python -m src.mimic.preprocess
 Convert grayscale images to RGB 224×224 for fast training:
 
 ```bash
-# Test with small subset first (recommended for pipeline validation)
-python src/mimic/preprocess_images.py --limit 1000 --verify
-
 # Process ALL images from CSV (for production use)
-python src/mimic/preprocess_images.py --batch-size 2000 --num-workers 12 --verify
+python src/mimic/preprocess_images.py --batch-size 128 --num-workers 12 --verify
 ```
 
 **Important Notes**:
@@ -118,33 +128,35 @@ python benchmarks/benchmark_MIMIC_v2.py \
     --epochs 5 \
     --batch-size 32 \
     --data-fraction 0.01 \
-    --num-runs 2
+    --num-runs 2 \
+    --output-dir results
 
 # Production run with full dataset
 python benchmarks/benchmark_MIMIC_v2.py \
     --epochs 50 \
     --batch-size 64 \
-    --num-runs 3
-
+    --output-dir results
 ```
 
 **What happens during this step**:
 1. ✅ Loads preprocessed images (fast!)
-2. ✅ Trains 4 models: NLL, CPL, CPL(ipcw), CPL(ipcw batch)
+2. ✅ Trains 4 loss variants: NLL, CPL, CPL (dynamic), CPL (static)
 3. ✅ Evaluates with **comprehensive metrics** after each training run
 4. ✅ Saves best models + evaluation results
 5. ✅ Generates summary statistics across multiple runs
+
+**Note**: `CPL (dynamic)` = `CPL (ipcw)` in code, `CPL (static)` = `CPL (ipcw batch)` in code
 
 **Output Files**:
 ```
 results/
 ├── models/
-│   ├── nll_best/
+│   ├── nll_best/                      # NLL models
 │   │   ├── nll_latest_best.pth
 │   │   └── nll_best_summary.txt
-│   ├── cpl_best/
-│   ├── cpl_ipcw_best/
-│   └── cpl_ipcw_batch_best/
+│   ├── cpl_best/                      # CPL models
+│   ├── cpl_ipcw_best/                 # CPL (dynamic) models
+│   └── cpl_ipcw_batch_best/           # CPL (static) models
 └── comprehensive_evaluation/
     ├── benchmark_v2_summary_YYYYMMDD_HHMMSS.csv
     ├── benchmark_v2_detailed_YYYYMMDD_HHMMSS.json
@@ -169,7 +181,6 @@ python src/mimic/preprocess_images.py
 
 # 2. Train on different fractions WITHOUT re-preprocessing
 python benchmarks/benchmark_MIMIC_v2.py --data-fraction 0.01  # 1% for testing
-python benchmarks/benchmark_MIMIC_v2.py --data-fraction 0.10  # 10% for validation
 python benchmarks/benchmark_MIMIC_v2.py --data-fraction 1.00  # 100% for final model
 ```
 
@@ -185,12 +196,6 @@ python benchmarks/benchmark_MIMIC_v2.py --data-fraction 1.00  # 100% for final m
 1. **MIMIC-IV Access**: Obtain access to MIMIC-IV dataset from PhysioNet
 2. **Data Directory**: Ensure MIMIC data is accessible at specified path
 3. **Environment**: Install required packages
-
-```bash
-conda activate concordance-pairwise-loss
-pip install pillow tqdm pandas numpy torch torchvision
-pip install monai[all]  # Optional but recommended for optimization
-```
 
 ### Data Directory Structure
 
@@ -278,32 +283,21 @@ benchmarks/
 
 ## Configuration Options
 
-### Standard Data Loader
+### Optimized Preprocessed Data Loader (Recommended)
+
+The benchmark uses MONAI-optimized data loading for best performance:
+
 ```python
-from src.mimic.mimic_data_loader import MIMICDataLoader
+from src.mimic.preprocessed_data_loader import OptimizedPreprocessedMIMICDataLoader
 
-loader = MIMICDataLoader(
-    batch_size=128,                    # Batch size for data loaders
-    data_dir="Y:/MIMIC-CXR-JPG/mimic-cxr-jpg-2.1.0.physionet.org",
-    csv_path="data/mimic/mimic_cxr_splits.csv",
-    target_size=(224, 224),            # Target image size for EfficientNet-B0
-    use_augmentation=True,             # Whether to use data augmentation
-    num_workers=4,                     # Number of worker processes
-    pin_memory=True                    # Pin memory for GPU transfer
-)
-```
-
-### Preprocessed Data Loader
-```python
-from src.mimic.preprocessed_data_loader import PreprocessedMIMICDataLoader
-
-loader = PreprocessedMIMICDataLoader(
-    batch_size=128,                    # Batch size for data loaders
+loader = OptimizedPreprocessedMIMICDataLoader(
+    batch_size=64,                     # Batch size for data loaders
     data_dir="Y:/MIMIC-CXR-JPG/mimic-cxr-jpg-2.1.0.physionet.org/preprocessed_mimic_cxr",
     csv_path="data/mimic/mimic_cxr_splits_preprocessed.csv",
     use_augmentation=True,             # Light augmentation (rotation, flip, color)
-    num_workers=8,                     # More workers (images load faster)
-    pin_memory=True,
+    cache_rate=0.4,                    # Cache 40% of data in memory for faster loading
+    num_workers=12,                    # Number of workers for data loading
+    pin_memory=True,                   # Pin memory for GPU transfer
     data_fraction=1.0                  # Use full dataset (or fraction for testing)
 )
 ```
@@ -334,23 +328,6 @@ python benchmarks/benchmark_MIMIC_v2.py \
 
 ### Example Configurations
 
-#### Development & Testing (Fast Iteration)
-```bash
-# Quick sanity check with minimal data
-python benchmarks/benchmark_MIMIC_v2.py \
-    --epochs 3 \
-    --batch-size 16 \
-    --data-fraction 0.001 \
-    --num-runs 1
-
-# Standard testing configuration
-python benchmarks/benchmark_MIMIC_v2.py \
-    --epochs 25 \
-    --batch-size 128 \
-    --data-fraction 1.00 \
-    --num-runs 1
-```
-
 #### Production Training (Full Dataset)
 ```bash
 # Standard production run
@@ -360,45 +337,10 @@ python benchmarks/benchmark_MIMIC_v2.py \
     --lr 1e-4 \
     --weight-decay 1e-5 \
     --patience 20 \
-    --num-workers 16
-    --num-runs 3
+    --num-workers 16 \
+    --output-dir results
 ```
 
-#### Validation Experiments (Intermediate Data Fractions)
-```bash
-python benchmarks/benchmark_MIMIC_v2.py \
-    --epochs 20 \
-    --batch-size 64 \
-    --data-fraction 1.0 \
-    --num-runs 3
-```
-
-## Performance Optimization
-
-### For Preprocessing
-- **Use SSD storage** for input and output directories
-- **Increase workers**: `--num-workers 16` (up to CPU cores)
-- **Increase batch size**: `--batch-size 128` (more memory usage)
-- **Use high-end CPU**: Preprocessing is CPU-intensive
-
-### For Training
-- **Use preprocessed images**: 3-5x faster than on-the-fly transforms
-- **Increase batch size**: Limited by GPU memory
-- **Enable MONAI optimizations**: Automatic with preprocessed loader
-- **Use mixed precision**: Enabled automatically on GPU
-- **Pin memory**: `pin_memory=True` for GPU training
-
-
-## Data Format
-
-### Input Images
-- **Original**: Grayscale JPEG, various sizes (typically ~2500×3000)
-- **Preprocessed**: RGB JPEG, 224×224, quality=100
-
-### Output Format
-- **Images**: `torch.Tensor` of shape `(batch_size, 3, 224, 224)`
-- **Events**: `torch.Tensor` of shape `(batch_size,)` - boolean event indicators
-- **Times**: `torch.Tensor` of shape `(batch_size,)` - float time to event values
 
 ### CSV Structure
 
@@ -453,13 +395,13 @@ After running `benchmark_MIMIC_v2.py`, you'll get:
 #### 1. Model Checkpoints
 ```
 results/models/
-├── nll_best/
+├── nll_best/                      # NLL models
 │   ├── nll_latest_best.pth           # Best NLL model
 │   ├── nll_best_summary.txt          # Full metrics summary
 │   └── nll_best_run1_valUno0.7123_testUno0.7089_20250103_120000.pth
-├── cpl_best/
-├── cpl_ipcw_best/
-└── cpl_ipcw_batch_best/
+├── cpl_best/                      # CPL models
+├── cpl_ipcw_best/                 # CPL (dynamic) models
+└── cpl_ipcw_batch_best/           # CPL (static) models
 ```
 
 #### 2. Evaluation Results
@@ -468,6 +410,7 @@ results/comprehensive_evaluation/
 ├── benchmark_v2_summary_YYYYMMDD_HHMMSS.csv       # Mean ± Std across runs
 ├── benchmark_v2_detailed_YYYYMMDD_HHMMSS.json     # Complete results JSON
 └── benchmark_v2_per_run_YYYYMMDD_HHMMSS.csv       # Individual run metrics
+```
 
 ### Understanding the Results
 

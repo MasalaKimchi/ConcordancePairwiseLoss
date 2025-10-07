@@ -40,36 +40,62 @@ nll_w, pairwise_w = loss_combiner.get_weights_scale_balanced(
 
 ## Methods
 
-- **Negative Partial Log-Likelihood (NLL)**: Traditional Cox proportional hazards partial log-likelihood loss
-- **Pairwise Ranking Loss**: ConcordancePairwiseLoss that directly optimizes concordance
-- **Normalized Loss Combination**: Scale-balanced combination using fixed normalization factors (25.0 for NLL, 2.0 for Pairwise)
+### Loss Function Variants
+
+- **NLL (Negative Partial Log-Likelihood)**: Traditional Cox proportional hazards partial log-likelihood loss
+- **CPL (Concordance Pairwise Loss)**: Directly optimizes concordance via pairwise ranking
+- **CPL (dynamic)**: CPL with Inverse Probability of Censoring Weights (IPCW) computed dynamically per batch
+- **CPL (static)**: CPL with IPCW weights precomputed from the full training set and reused across batches
+
+### Terminology Mapping
+
+For clarity in documentation and code:
+
+| **Documentation Name** | **Code Name** | **Description** |
+|------------------------|---------------|-----------------|
+| NLL | `nll` | Cox proportional hazards loss |
+| CPL | `cpl` | Base concordance pairwise loss |
+| CPL (dynamic) | `cpl_ipcw` | IPCW computed per batch |
+| CPL (static) | `cpl_ipcw_batch` | IPCW precomputed once |
+
+**Why "dynamic" vs "static"?**
+- **Dynamic**: IPCW weights are recalculated for each batch during training, adapting to the specific samples
+- **Static**: IPCW weights are computed once from the entire training set and remain fixed throughout training
 
 ## Running Benchmarks
 
-Use the unified benchmark framework to evaluate models across available datasets.
+Use the V2 benchmark framework to evaluate models across available datasets with comprehensive metrics.
 
-### Quick Start
+### Tabular Datasets
+
 ```bash
-python benchmarks/benchmark_framework_improved.py --dataset gbsg2 --loss-type nll --epochs 3
+# Run on a single dataset (recommended for tabular datasets)
+conda activate concordance-pairwise-loss
+python benchmarks/benchmark_tabular_v2.py --dataset gbsg2 --epochs 30 --num-runs 10
+
+# Run on all tabular datasets
+python benchmarks/benchmark_tabular_v2.py --dataset all --epochs 30 --num-runs 10
 ```
 
-### Adding a New Dataset
-1. Implement a loader inheriting from `AbstractDataLoader` in `src/data_loaders.py` and register it in `DATA_LOADERS`.
-2. Add the dataset's AUC horizon and time units to `benchmarks/dataset_configs.json`.
-3. Run the benchmark with `--dataset <name>`.
+**Key Features**:
+- Tests 4 core loss functions: NLL, CPL, CPL (dynamic), CPL (static)
+- Hyperparameter grid search across learning rates and hidden dimensions
+- Multiple independent runs for statistical robustness
+- Comprehensive metrics: Harrell's C, Uno's C, Cumulative AUC, Incident AUC, Brier Score
+
+### Medical Imaging (MIMIC-IV)
+
+```bash
+# Experimentation run with full dataset
+python benchmarks/benchmark_MIMIC_v2.py --epochs 25 --batch-size 64
+```
+
+**See [src/mimic/README.md](src/mimic/README.md) for complete MIMIC-IV setup and usage guide.**
 
 ### Available Datasets
-- **Large datasets**: FLChain (7,874), SUPPORT2 (8,873)
-- **Medium datasets**: GBSG2 (686), WHAS500 (500), METABRIC (1,903)
-- **Medical Imaging**: MIMIC-IV Chest X-ray (see [src/mimic/README.md](src/mimic/README.md) for details)
-
-### Statistical Analysis
-Each benchmark provides professional statistical analysis:
-- **Multi-run support**: Mean ± standard deviation across independent runs
-- **Comprehensive metrics**: Harrell C-index, Uno C-index, AUC, Brier Score
-- **Rich visualizations**: 6-panel analysis plots with fixed dimensions
-- **Professional output**: JSON + CSV + PNG files with timestamps
-
+- **Large tabular**: FLChain (7,874), SUPPORT2 (8,873)
+- **Medium tabular**: GBSG2 (686), WHAS500 (500), METABRIC (1,903)
+- **Medical Imaging**: MIMIC-IV Chest X-ray (~300k images)
 
 ## Project Structure
 
@@ -78,18 +104,16 @@ ConcordancePairwiseLoss/
 ├── src/                          # Source code
 │   ├── concordance_pairwise_loss/
 │   │   ├── __init__.py
-│   │   ├── loss.py               # Main ConcordancePairwiseLoss implementation
-│   │   └── dynamic_weighting.py  # Dynamic weighting strategies
+│   │   └── loss.py               # Main ConcordancePairwiseLoss implementation
 │   ├── abstract_data_loader.py   # Base class for dataset loaders
 │   ├── data_loaders.py           # Implementations of supported datasets
 │   ├── mimic/                    # MIMIC-IV medical imaging module
 │   ├── dataset_configs.py        # Utility for loading dataset metadata
 │   └── flexible_dataset.py       # Dataset utilities
 ├── benchmarks/
-│   ├── benchmark_framework.py      # Legacy benchmark framework
-│   ├── benchmark_framework_improved.py  # Current benchmark framework
-│   └── dataset_configs.json        # Dataset-specific evaluation settings
-├── src/mimic/preprocess.py       # MIMIC-IV preprocessing script
+│   ├── benchmark_tabular_v2.py   # ⭐ Tabular datasets benchmark
+│   ├── benchmark_MIMIC_v2.py     # ⭐ MIMIC-IV imaging benchmark
+│   └── dataset_configs.json      # Dataset-specific evaluation settings
 ├── README.md                     # This file
 └── src/mimic/README.md          # MIMIC-IV specific documentation
 ```
