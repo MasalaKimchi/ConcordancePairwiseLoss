@@ -190,60 +190,46 @@ class SUPPORT2DataLoader(AbstractDataLoader):
         self.batch_size = batch_size
 
     def _preprocess_pycox_support(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Preprocess pycox SUPPORT dataset with proper column mapping and encoding."""
+        """Preprocess pycox SUPPORT dataset following standard pycox conventions.
         
-        # Map pycox columns to meaningful names (based on the provided code)
-        new_columns = [
-            "age",
-            "sex", 
-            "race",
-            "number_of_comorbidities",
-            "presence_of_diabetes",
-            "presence_of_dementia", 
-            "presence_of_cancer",
-            "mean_arterial_blood_pressure",
-            "heart_rate",
-            "respiration_rate",
-            "temperature",
-            "white_blood_cell_count",
-            "serums_sodium",
-            "serums_creatinine",
-        ]
+        The pycox SUPPORT dataset (support.read_df()) returns a DataFrame with:
+        - Columns x0, x1, ..., x13: 14 numerical covariates (already preprocessed)
+        - Column 'duration': survival/censoring time in days
+        - Column 'event': binary event indicator (1=event, 0=censored)
         
-        # Get x_covar columns (x0, x1, x2, etc.)
-        x_covar_columns = [c for c in df.columns if "x" == c[0]]
-        col_map = dict(zip(x_covar_columns, new_columns))
-        df = df.rename(columns=col_map)
+        Standard preprocessing steps based on pycox conventions:
+        1. Column names are already lowercase in pycox
+        2. Features are already numeric (no categorical encoding needed)
+        3. Apply standardization to features for neural network training
+        4. Rename 'duration' to 'time' for consistency with our framework
+        """
         
-        # Rename duration and event columns to match our standard
-        df = df.rename(columns={'duration': 'time'})
+        # Rename duration to time for consistency
+        if 'duration' in df.columns:
+            df = df.rename(columns={'duration': 'time'})
         
-        # The pycox SUPPORT dataset is already preprocessed and contains only numeric features
-        # All columns are already float32/int32, so we just need to scale them
+        # Get feature columns (all x* columns)
+        feature_cols = [c for c in df.columns if c.startswith('x')]
         
-        # Define columns for scaling (all feature columns except time and event)
-        feature_cols = [c for c in df.columns if c not in ['time', 'event']]
+        # The pycox SUPPORT dataset should not have missing values,
+        # but check and handle if any exist
+        if df[feature_cols].isnull().any().any():
+            print(f"Warning: Found {df[feature_cols].isnull().sum().sum()} missing values in SUPPORT dataset")
+            for col in feature_cols:
+                if df[col].isnull().any():
+                    df[col] = df[col].fillna(df[col].median())
         
-        # Handle any missing values (though pycox dataset should be complete)
-        for col in feature_cols:
-            if df[col].isnull().any():
-                df[col] = df[col].fillna(df[col].median())
+        # Standardize all features (important for neural networks)
+        # This follows the standard practice in survival analysis benchmarks
+        scaler = StandardScaler()
+        df[feature_cols] = scaler.fit_transform(df[feature_cols])
         
-        # Scale all numerical features
-        if feature_cols:
-            scaler = StandardScaler()
-            df[feature_cols] = scaler.fit_transform(df[feature_cols])
+        # Verify event column is binary (0/1) as expected
+        assert df['event'].nunique() == 2, f"Event column should be binary, found {df['event'].nunique()} unique values"
+        assert set(df['event'].unique()).issubset({0, 1}), f"Event values should be 0/1, found {df['event'].unique()}"
         
-        # Ensure event column is binary (0/1) - should already be correct
-        if df['event'].min() < 0 or df['event'].max() > 1:
-            uniq = sorted(df['event'].unique())
-            if len(uniq) == 2:
-                df['event'] = (df['event'] == uniq[1]).astype(int)
-            else:
-                df['event'] = (df['event'] > 0).astype(int)
-        
-        # Remove any remaining missing values (shouldn't be any)
-        df = df.dropna()
+        # Verify no missing values remain
+        assert not df.isnull().any().any(), "Missing values found after preprocessing"
         
         return df
 
