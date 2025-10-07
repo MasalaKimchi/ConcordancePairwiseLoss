@@ -31,20 +31,193 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 from scipy import stats
 
-# Ensure we can import the original framework
+# Ensure we can import from src directory
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'src'))
 sys.path.append(os.path.dirname(__file__))
 
-from benchmark_framework import (
-    BenchmarkEvaluator,
-    BenchmarkVisualizer,
-    DATASET_CONFIGS,
-)
-from benchmark_framework_improved import ResultsLogger
 from data_loaders import DATA_LOADERS
+from dataset_configs import DatasetConfig, load_dataset_configs
 from concordance_pairwise_loss import ConcordancePairwiseLoss
 from concordance_pairwise_loss.dynamic_weighting import NormalizedLossCombination
 from torchsurv.loss.cox import neg_partial_log_likelihood
+from torchsurv.metrics.auc import Auc
+from torchsurv.metrics.cindex import ConcordanceIndex
+from torchsurv.metrics.brier_score import BrierScore
+from torchsurv.stats.ipcw import get_ipcw
+
+# Load dataset configurations
+DATASET_CONFIGS = load_dataset_configs()
+
+
+# ============================================================================
+# Extracted Required Components from Benchmark Framework
+# ============================================================================
+
+class BenchmarkEvaluator:
+    """Shared evaluation logic for benchmarks."""
+    
+    def __init__(self, device: torch.device, dataset_config: DatasetConfig):
+        self.device = device
+        self.dataset_config = dataset_config
+    
+    def evaluate_model(self, model: torch.nn.Module, dataloader_test: DataLoader) -> Dict[str, float]:
+        """Evaluate model performance with comprehensive metrics using full test set."""
+        model.eval()
+        all_log_hz = []
+        all_events = []
+        all_times = []
+        
+        # Collect all test data for comprehensive evaluation
+        with torch.no_grad():
+            for batch in dataloader_test:
+                # Handle different data formats (MONAI vs standard)
+                if isinstance(batch, dict):
+                    x = batch["image"]
+                    event = batch["event"]
+                    time = batch["time"]
+                else:
+                    x, (event, time) = batch
+                
+                # Convert MONAI MetaTensors to regular PyTorch tensors
+                if hasattr(x, 'as_tensor'):
+                    x = x.as_tensor()
+                if hasattr(event, 'as_tensor'):
+                    event = event.as_tensor()
+                if hasattr(time, 'as_tensor'):
+                    time = time.as_tensor()
+                
+                x, event, time = x.to(self.device), event.to(self.device), time.to(self.device)
+                out = model(x)
+                # Support models that optionally return (risk, log_tau)
+                if isinstance(out, tuple):
+                    log_hz = out[0]
+                else:
+                    log_hz = out
+                
+                all_log_hz.append(log_hz)
+                all_events.append(event)
+                all_times.append(time)
+        
+        # Concatenate all batches
+        log_hz = torch.cat(all_log_hz, dim=0)
+        event = torch.cat(all_events, dim=0)
+        time = torch.cat(all_times, dim=0)
+        
+        # Ensure correct data types for torchsurv requirements
+        event = event.bool()  # torchsurv requires boolean events
+        time = time.float()   # torchsurv requires float times
+        
+        # Get IPCW weights for Uno's C-index
+        try:
+            if event.any():  # Only compute IPCW if there are events
+                event_cpu = event.cpu()
+                time_cpu = time.cpu()
+                ipcw_weights = get_ipcw(event_cpu, time_cpu)
+                ipcw_weights = ipcw_weights.to(self.device)
+            else:
+                ipcw_weights = torch.ones_like(event, dtype=torch.float, device=self.device)
+        except Exception:
+            ipcw_weights = torch.ones_like(event, dtype=torch.float, device=self.device)
+        
+        # Initialize metrics
+        cindex = ConcordanceIndex()
+        auc = Auc()
+        brier = BrierScore()
+        
+        # torchsurv metrics compute on CPU
+        log_hz_cpu = log_hz.cpu()
+        event_cpu = event.cpu()
+        time_cpu = time.cpu()
+        ipcw_weights_cpu = ipcw_weights.cpu()
+        
+        # 1. Harrell's C-index (without IPCW weights)
+        harrell_cindex = cindex(log_hz_cpu, event_cpu, time_cpu)
+        
+        # 2. Uno's C-index (with IPCW weights)
+        uno_cindex = cindex(log_hz_cpu, event_cpu, time_cpu, weight=ipcw_weights_cpu)
+        
+        # 3. AUC metrics
+        cumulative_auc_tensor = auc(log_hz_cpu, event_cpu, time_cpu)
+        cumulative_auc = torch.mean(cumulative_auc_tensor)
+        
+        new_time_cpu = torch.tensor(self.dataset_config.auc_time)
+        incident_auc = auc(log_hz_cpu, event_cpu, time_cpu, new_time=new_time_cpu)
+        
+        # 4. Brier Score
+        try:
+            survival_probs_cpu = torch.sigmoid(-log_hz_cpu)
+            brier_score = brier(survival_probs_cpu, event_cpu, time_cpu, new_time=new_time_cpu)
+        except Exception:
+            brier_score = torch.tensor(float('nan'))
+        
+        return {
+            'harrell_cindex': harrell_cindex.item(),
+            'uno_cindex': uno_cindex.item(),
+            'cumulative_auc': cumulative_auc.item(),
+            'incident_auc': incident_auc.item(),
+            'brier_score': brier_score.item()
+        }
+
+
+class BenchmarkVisualizer:
+    """Placeholder visualizer (not used in this script but needed for compatibility)."""
+    
+    def __init__(self, dataset_config: DatasetConfig, output_dir: str = None):
+        self.dataset_config = dataset_config
+        self.output_dir = output_dir
+
+
+class ResultsLogger:
+    """Handles saving benchmark results to files with timestamps."""
+    
+    def __init__(self, dataset_name: str, output_dir: str = "results"):
+        self.dataset_name = dataset_name
+        self.output_dir = output_dir
+        os.makedirs(output_dir, exist_ok=True)
+    
+    def save_results(self, results: Dict[str, Dict], filename: str) -> Dict[str, str]:
+        """Save results to JSON and CSV files."""
+        saved_files = {}
+        
+        # Save JSON
+        json_path = os.path.join(self.output_dir, f"{filename}.json")
+        # Convert results to JSON-serializable format
+        json_results = {}
+        for method, result in results.items():
+            json_results[method] = {
+                'evaluation': {k: float(v) if hasattr(v, 'item') else v 
+                             for k, v in result['evaluation'].items() if not k.endswith('_values')},
+                'training': {
+                    'train_losses': [float(x) for x in result['training']['train_losses']],
+                    'val_losses': [float(x) for x in result['training']['val_losses']],
+                },
+                'best_hparams': result.get('best_hparams', {}),
+                'num_runs': result.get('num_runs', 1)
+            }
+        
+        with open(json_path, 'w') as f:
+            json.dump(json_results, f, indent=2)
+        saved_files['json'] = json_path
+        
+        # Save CSV for losses
+        csv_path = os.path.join(self.output_dir, f"{filename}_losses.csv")
+        with open(csv_path, 'w', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow(["loss_type", "final_train_loss", "final_val_loss"])
+            for loss_type, result in results.items():
+                train_losses = result['training']['train_losses']
+                val_losses = result['training']['val_losses']
+                final_train = train_losses[-1] if train_losses else 0.0
+                final_val = val_losses[-1] if val_losses else 0.0
+                writer.writerow([loss_type, final_train, final_val])
+        saved_files['losses_csv'] = csv_path
+        
+        return saved_files
+
+
+# ============================================================================
+# End of Extracted Components
+# ============================================================================
 
 
 class TabularBenchmarkTrainer:
@@ -450,7 +623,7 @@ class TabularBenchmarkRunner:
             # Define grids (streamlined for efficiency)
             lr_grid = [0.01, 0.005, 0.001]  
             hd_grid = [32, 64, 128]
-            temp_grid = [0.5, 1.0, 2.0] if (loss_type != 'nll') else [1.0]
+            temp_grid = [1.0, 2.0] if (loss_type != 'nll') else [1.0]
                 
             for hd in hd_grid:
                 print(f"\n--- {loss_type.upper()} (hd{hd}) ---")

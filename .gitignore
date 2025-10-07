@@ -249,6 +249,7 @@ checkpoints/
 logs/
 outputs/
 results/
+results-batch-64/
 
 # Temporary experiment files
 temp/

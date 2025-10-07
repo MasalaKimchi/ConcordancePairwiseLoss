@@ -52,14 +52,10 @@ sys.path.append(os.path.dirname(__file__))
 from mimic.util import MIMICBenchmarkRunner
 from mimic.preprocessed_data_loader import PreprocessedMIMICDataLoader, OptimizedPreprocessedMIMICDataLoader
 
-# Import evaluation components (same as evaluate_saved_models.py)
-try:
-    from benchmark_framework import BenchmarkEvaluator, DatasetConfig
-    BENCHMARK_FRAMEWORK_AVAILABLE = True
-except ImportError:
-    BENCHMARK_FRAMEWORK_AVAILABLE = False
-    print("Warning: benchmark_framework not available. Evaluation will be limited.")
+# Import DatasetConfig
+from dataset_configs import DatasetConfig
 
+# Import evaluation components
 from torchsurv.metrics.cindex import ConcordanceIndex
 from torchsurv.metrics.auc import Auc
 from torchsurv.metrics.brier_score import BrierScore
@@ -229,20 +225,15 @@ class PreprocessedMIMICBenchmarkRunnerV2(MIMICBenchmarkRunner):
         self.data_fraction = data_fraction
         
         # Initialize dataset config for comprehensive evaluation
-        if BENCHMARK_FRAMEWORK_AVAILABLE:
-            self.dataset_config = DatasetConfig(
-                name="MIMIC-IV",
-                auc_time=365.0,  # 1 year in days
-                auc_time_unit="days"
-            )
-            self.comprehensive_evaluator = ComprehensiveMIMICEvaluator(
-                self.trainer.device, 
-                self.dataset_config
-            )
-        else:
-            self.dataset_config = None
-            self.comprehensive_evaluator = None
-            print("WARNING: BenchmarkEvaluator not available. Using fallback evaluation.")
+        self.dataset_config = DatasetConfig(
+            name="MIMIC-IV",
+            auc_time=365.0,  # 1 year in days
+            auc_time_unit="days"
+        )
+        self.comprehensive_evaluator = ComprehensiveMIMICEvaluator(
+            self.trainer.device, 
+            self.dataset_config
+        )
     
     def run_comparison(self, args=None) -> dict:
         """Run comparison with comprehensive evaluation."""
@@ -350,18 +341,12 @@ class PreprocessedMIMICBenchmarkRunnerV2(MIMICBenchmarkRunner):
                 
                 # Comprehensive evaluation on validation set
                 print(f"  Comprehensive evaluation on validation set...")
-                if self.comprehensive_evaluator:
-                    val_eval = self.comprehensive_evaluator.evaluate_model(model, dataloader_val)
-                else:
-                    val_eval = self.evaluator.evaluate_model(model, dataloader_val)
+                val_eval = self.comprehensive_evaluator.evaluate_model(model, dataloader_val)
                 val_comprehensive_results.append(val_eval)
                 
                 # Comprehensive evaluation on test set
                 print(f"  Comprehensive evaluation on test set...")
-                if self.comprehensive_evaluator:
-                    test_eval = self.comprehensive_evaluator.evaluate_model(model, dataloader_test)
-                else:
-                    test_eval = self.evaluator.evaluate_model(model, dataloader_test)
+                test_eval = self.comprehensive_evaluator.evaluate_model(model, dataloader_test)
                 test_comprehensive_results.append(test_eval)
                 training_results_list.append(training_results)
                 
@@ -696,12 +681,6 @@ def main():
     parser.add_argument('--num-runs', type=int, default=1, help='Number of independent runs per loss type')
     
     args = parser.parse_args()
-    
-    # Check dependencies
-    if not BENCHMARK_FRAMEWORK_AVAILABLE:
-        print("❌ ERROR: benchmark_framework not available.")
-        print("   Make sure benchmark_framework.py is in the Python path.")
-        return 1
     
     # Check if preprocessed data exists
     if not os.path.exists(args.csv_path):

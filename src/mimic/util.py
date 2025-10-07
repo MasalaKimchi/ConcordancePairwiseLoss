@@ -724,18 +724,23 @@ class MIMICBenchmarkRunner:
         try:
             from benchmark_framework import DatasetConfig, BenchmarkEvaluator, BenchmarkVisualizer
             from benchmark_framework_improved import ResultsLogger
-        except ImportError:
-            raise ImportError("benchmark_framework modules are required. Make sure they are in the Python path.")
-        
-        self.dataset_config = DatasetConfig(
-            name="MIMIC-IV",
-            auc_time=365.0,  # 1 year in days
-            auc_time_unit="days"
-        )
-        
-        self.evaluator = BenchmarkEvaluator(self.device, self.dataset_config)
-        self.visualizer = BenchmarkVisualizer(self.dataset_config, output_dir if save_results else None)
-        self.logger = ResultsLogger(self.dataset_config.name, output_dir) if save_results else None
+            
+            self.dataset_config = DatasetConfig(
+                name="MIMIC-IV",
+                auc_time=365.0,  # 1 year in days
+                auc_time_unit="days"
+            )
+            
+            self.evaluator = BenchmarkEvaluator(self.device, self.dataset_config)
+            self.visualizer = BenchmarkVisualizer(self.dataset_config, output_dir if save_results else None)
+            self.logger = ResultsLogger(self.dataset_config.name, output_dir) if save_results else None
+        except ImportError as e:
+            # Allow subclasses to work without benchmark_framework if they override run_comparison
+            print(f"Warning: benchmark_framework not available ({e}). Some features may be limited.")
+            self.dataset_config = None
+            self.evaluator = None
+            self.visualizer = None
+            self.logger = None
         
         print(f"MIMIC Benchmark Setup:")
         print(f"  Dataset: MIMIC-IV Chest X-ray")
@@ -773,6 +778,13 @@ class MIMICBenchmarkRunner:
     
     def run_comparison(self, args=None) -> Dict[str, Dict]:
         """Run comparison of core loss functions with multiple runs and statistical analysis."""
+        # Check if evaluator is available (required for this method)
+        if self.evaluator is None:
+            raise RuntimeError(
+                "BenchmarkEvaluator is not available. This method requires benchmark_framework to be installed. "
+                "Use PreprocessedMIMICBenchmarkRunnerV2 from benchmark_MIMIC_v2.py instead, which doesn't require it."
+            )
+        
         import time as time_module
         start_time = time_module.time()
         
