@@ -30,11 +30,11 @@ pip install -r requirements.txt
 ```python
 from src.concordance_pairwise_loss import ConcordancePairwiseLoss
 
-# Create loss function
+# Create loss function (uses default settings from all experiments)
 loss_fn = ConcordancePairwiseLoss(
     temperature=1.0,
-    temp_scaling='linear',
-    pairwise_sampling='balanced',
+    temp_scaling='linear',      # Default: linear scaling
+    pairwise_sampling='balanced',  # Default: balanced sampling
     use_ipcw=False
 )
 
@@ -42,16 +42,28 @@ loss_fn = ConcordancePairwiseLoss(
 loss = loss_fn(log_risks, times, events)
 ```
 
-### Normalized Loss Combination
+### Usage with IPCW (Inverse Probability of Censoring Weights)
+
+**Note**: All experiments use `temp_scaling='linear'` and `pairwise_sampling='balanced'` as defaults.
+
 ```python
-from src.concordance_pairwise_loss import NormalizedLossCombination
+from src.concordance_pairwise_loss import ConcordancePairwiseLoss
 
-# Create normalized loss combination
-loss_combiner = NormalizedLossCombination(total_epochs=100)
+# CPL with dynamic IPCW (computed per batch)
+loss_fn_dynamic = ConcordancePairwiseLoss(
+    temperature=1.0,
+    use_ipcw=True
+    # temp_scaling='linear' (default)
+    # pairwise_sampling='balanced' (default)
+)
 
-# Get weights during training
-nll_w, pairwise_w = loss_combiner.get_weights_scale_balanced(
-    epoch, nll_loss, pairwise_loss
+# CPL with static IPCW (precomputed from training set)
+loss_fn_static = ConcordancePairwiseLoss(
+    temperature=1.0,
+    use_ipcw=True,
+    ipcw_weights=precomputed_weights  # Pass precomputed weights
+    # temp_scaling='linear' (default)
+    # pairwise_sampling='balanced' (default)
 )
 ```
 
@@ -63,6 +75,11 @@ nll_w, pairwise_w = loss_combiner.get_weights_scale_balanced(
 - **CPL (Concordance Pairwise Loss)**: Directly optimizes concordance via pairwise ranking
 - **CPL (dynamic)**: CPL with Inverse Probability of Censoring Weights (IPCW) computed dynamically per batch
 - **CPL (static)**: CPL with IPCW weights precomputed from the full training set and reused across batches
+
+**Configuration for All Experiments**:
+- Temperature scaling: `temp_scaling='linear'`
+- Pairwise sampling: `pairwise_sampling='balanced'` (higher weight for event-event pairs)
+- Reduction: `reduction='mean'` (weight-normalized)
 
 ### Terminology Mapping
 

@@ -24,6 +24,11 @@ class ConcordancePairwiseLoss:
     definition of comparable pairs: (i,j) is comparable only if t_i < t_j AND δ_i = 1
     (earlier sample had an event).
     
+    **Default Configuration (used in all experiments)**:
+    - temp_scaling='linear': Linear temperature scaling
+    - pairwise_sampling='balanced': Balanced sampling with higher weight for event-event pairs
+    - reduction='mean': Weight-normalized mean reduction
+    
     Key features:
     - Proper comparable pair definition for right-censoring
     - IPCW weights applied to earlier index only (Uno's method)
@@ -35,11 +40,14 @@ class ConcordancePairwiseLoss:
         temperature: Temperature parameter for the logistic function (default: 1.0)
         reduction: Reduction method ('mean', 'sum', 'none') - 'mean' uses weight normalization
         ipcw_weights: Pre-computed IPCW weights (optional)
-        temp_scaling: Temperature scaling strategy ('linear', 'log', 'sqrt')
-        pairwise_sampling: Pairwise sampling strategy:
+        temp_scaling: Temperature scaling strategy (default: 'linear')
+                     - 'linear': Linear temperature scaling (used in all experiments)
+                     - 'log': Logarithmic scaling
+                     - 'sqrt': Square root scaling
+        pairwise_sampling: Pairwise sampling strategy (default: 'balanced')
                           - 'all': All comparable pairs
                           - 'event_only': Only pairs where both samples have events
-                          - 'balanced': All comparable pairs with higher weight for event-event pairs
+                          - 'balanced': All comparable pairs with higher weight for event-event pairs (used in all experiments)
         use_ipcw: Whether to use IPCW weights (default: True)
     """
     
