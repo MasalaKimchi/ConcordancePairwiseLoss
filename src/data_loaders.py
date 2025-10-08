@@ -2,6 +2,7 @@ import warnings
 warnings.filterwarnings("ignore")
 
 import os
+from abc import ABC, abstractmethod
 from typing import Tuple
 
 import numpy as np
@@ -11,8 +12,19 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder, StandardScaler
 from torch.utils.data import DataLoader
 
-from flexible_dataset import FlexibleDataset, Custom_dataset
-from abstract_data_loader import AbstractDataLoader
+from flexible_dataset import FlexibleDataset
+
+
+class AbstractDataLoader(ABC):
+    """Abstract base class for dataset loaders."""
+
+    @abstractmethod
+    def load_data(self) -> Tuple[DataLoader, DataLoader, DataLoader, int]:
+        """Load and return train, validation, and test dataloaders plus feature count."""
+        raise NotImplementedError
+
+
+# Import MIMIC loader after defining AbstractDataLoader to avoid circular imports
 from mimic.mimic_data_loader import MIMICDataLoader
 
 

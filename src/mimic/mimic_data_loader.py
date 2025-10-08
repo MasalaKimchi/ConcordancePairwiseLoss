@@ -14,20 +14,17 @@ from torch.utils.data import DataLoader
 
 from .dataset import MIMICImageDataset
 from .transforms import get_efficientnet_transforms
-from abstract_data_loader import AbstractDataLoader
+from data_loaders import AbstractDataLoader
 
 # Suppress MONAI deprecation warnings
 warnings.filterwarnings("ignore", category=UserWarning, module="monai")
 
 # MONAI imports for optimized data loading
-try:
-    from monai.data import CacheDataset, ThreadDataLoader, DataLoader as MonaiDataLoader
-    from monai.transforms import Compose, LoadImageD, EnsureChannelFirstD, ScaleIntensityD, RandFlipD, RandRotateD, RandZoomD
-    from monai.utils import set_determinism
-    MONAI_AVAILABLE = True
-    set_determinism(seed=42, use_deterministic_algorithms=False)
-except ImportError:
-    MONAI_AVAILABLE = False
+from monai.data import CacheDataset, ThreadDataLoader, DataLoader as MonaiDataLoader
+from monai.transforms import Compose, LoadImageD, EnsureChannelFirstD, ScaleIntensityD, RandFlipD, RandRotateD, RandZoomD
+from monai.utils import set_determinism
+
+set_determinism(seed=42, use_deterministic_algorithms=False)
 
 
 class MIMICDataLoader(AbstractDataLoader):
@@ -221,11 +218,6 @@ class OptimizedMIMICDataLoader:
         
     def _create_monai_transforms(self, is_training: bool = True):
         """Create MONAI-optimized transforms."""
-        if not MONAI_AVAILABLE:
-            # Fallback to standard transforms
-            from .transforms import get_efficientnet_transforms
-            return get_efficientnet_transforms(self.target_size, is_training)
-        
         # MONAI transforms for better performance
         from monai.data import PILReader
         
@@ -262,19 +254,6 @@ class OptimizedMIMICDataLoader:
     
     def load_data(self) -> Tuple[DataLoader, DataLoader, DataLoader, int]:
         """Load data with MONAI optimizations."""
-        if not MONAI_AVAILABLE:
-            # Fallback to standard loader
-            standard_loader = MIMICDataLoader(
-                batch_size=self.batch_size,
-                data_dir=self.data_dir,
-                csv_path=self.csv_path,
-                target_size=self.target_size,
-                use_augmentation=self.use_augmentation,
-                num_workers=self.num_workers,
-                pin_memory=self.pin_memory
-            )
-            return standard_loader.load_data()
-        
         # Load CSV data
         df = pd.read_csv(self.csv_path)
         df = df[df['exists'] == True].copy()

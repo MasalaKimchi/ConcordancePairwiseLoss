@@ -43,23 +43,3 @@ class FlexibleDataset(Dataset):
         # Predictors
         x = torch.tensor(sample.drop([self.event_col, self.time_col]).values).float()
         return x, (event, time)
-
-
-# Keep the original class for backward compatibility
-class Custom_dataset(Dataset):
-    """Custom dataset for the GSBG2 brain cancer dataset"""
-
-    def __init__(self, df: pd.DataFrame):
-        self.df = df
-
-    def __len__(self):
-        return len(self.df)
-
-    def __getitem__(self, idx):
-        sample = self.df.iloc[idx]
-        # Targets
-        event = torch.tensor(sample["cens"]).bool()
-        time = torch.tensor(sample["time"]).float()
-        # Predictors
-        x = torch.tensor(sample.drop(["cens", "time"]).values).float()
-        return x, (event, time)

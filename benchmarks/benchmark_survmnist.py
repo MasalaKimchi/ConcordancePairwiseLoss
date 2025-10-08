@@ -33,10 +33,12 @@ from torchsurv.metrics.auc import Auc
 from torchsurv.metrics.brier_score import BrierScore
 from torchsurv.stats.ipcw import get_ipcw
 
-# Add src to path for imports
+# Add src and benchmarks to path for imports
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'src'))
+sys.path.append(os.path.dirname(__file__))
 from concordance_pairwise_loss import ConcordancePairwiseLoss
 from survmnist import create_torchsurv_mnist_loaders
+from dataset_configs import DatasetConfig, load_dataset_configs
 
 # Set random seeds for reproducibility
 from lightning.pytorch import seed_everything
@@ -47,12 +49,14 @@ class LitMNISTEnhanced(L.LightningModule):
     """Enhanced PyTorch Lightning module for MNIST survival analysis with multiple loss support."""
     
     def __init__(self, backbone, loss_type: str = "nll", temperature: float = 1.0, 
-                 precomputed_ipcw_weights: Optional[torch.Tensor] = None):
+                 precomputed_ipcw_weights: Optional[torch.Tensor] = None,
+                 auc_time: float = 5.0):
         super().__init__()
         self.model = backbone
         self.loss_type = loss_type
         self.temperature = temperature
         self.precomputed_ipcw_weights = precomputed_ipcw_weights
+        self.auc_time = auc_time
         
         # Initialize loss functions
         self._init_loss_functions()
@@ -191,7 +195,11 @@ class LitMNISTEnhanced(L.LightningModule):
         cumulative_auc_tensor = self.auc(log_hz_cpu, events_cpu, times_cpu)
         cumulative_auc = torch.mean(cumulative_auc_tensor)
         
-        # 4. Brier Score for calibration assessment
+        # 4. Incident AUC at specified time point
+        incident_auc_time = torch.tensor(self.auc_time)
+        incident_auc = self.auc(log_hz_cpu, events_cpu, times_cpu, new_time=incident_auc_time)
+        
+        # 5. Brier Score for calibration assessment
         try:
             # Convert log hazards to survival probabilities
             survival_probs_cpu = torch.sigmoid(-log_hz_cpu)
@@ -205,6 +213,7 @@ class LitMNISTEnhanced(L.LightningModule):
         self.log("test_harrell_cindex", harrell_cindex, on_epoch=True)
         self.log("test_uno_cindex", uno_cindex, on_epoch=True)
         self.log("test_cumulative_auc", cumulative_auc, on_epoch=True)
+        self.log("test_incident_auc", incident_auc, on_epoch=True)
         self.log("test_brier_score", brier_score, on_epoch=True)
         
         # Store metrics for saving
@@ -212,6 +221,7 @@ class LitMNISTEnhanced(L.LightningModule):
             'harrell_cindex': harrell_cindex.item(),
             'uno_cindex': uno_cindex.item(),
             'cumulative_auc': cumulative_auc.item(),
+            'incident_auc': incident_auc.item(),
             'brier_score': brier_score.item() if not torch.isnan(brier_score) else float('nan')
         }
     
@@ -269,6 +279,11 @@ def run_experiment(
     print(f"RUNNING EXPERIMENT: {loss_type.upper()} (batch_size={batch_size}, epochs={epochs})")
     print(f"{'='*80}")
     
+    # Load dataset configuration
+    dataset_configs = load_dataset_configs()
+    dataset_config = dataset_configs.get('survival_mnist')
+    auc_time = dataset_config.auc_time if dataset_config else 5.0
+    
     # Create data loaders
     train_loader, test_loader, num_features = create_torchsurv_mnist_loaders(
         batch_size=batch_size,
@@ -278,6 +293,7 @@ def run_experiment(
     print(f"Number of features: {num_features}")
     print(f"Train dataset size: {len(train_loader.dataset)}")
     print(f"Test dataset size: {len(test_loader.dataset)}")
+    print(f"AUC evaluation time: {auc_time}")
     
     # Precompute IPCW weights for batch variant
     precomputed_ipcw_weights = None
@@ -292,7 +308,8 @@ def run_experiment(
         backbone=backbone,
         loss_type=loss_type,
         temperature=temperature,
-        precomputed_ipcw_weights=precomputed_ipcw_weights
+        precomputed_ipcw_weights=precomputed_ipcw_weights,
+        auc_time=auc_time
     )
     
     # Sanity checks (like in TorchSurv example)
@@ -332,6 +349,7 @@ def run_experiment(
     print(f"  Harrell's C-index: {final_metrics.get('harrell_cindex', 0.0):.4f}")
     print(f"  Uno's C-index: {final_metrics.get('uno_cindex', 0.0):.4f}")
     print(f"  Cumulative AUC: {final_metrics.get('cumulative_auc', 0.0):.4f}")
+    print(f"  Incident AUC (t={auc_time}): {final_metrics.get('incident_auc', 0.0):.4f}")
     print(f"  Brier Score: {final_metrics.get('brier_score', float('nan')):.4f}")
     
     return {
@@ -435,11 +453,11 @@ def main():
         )
         
         # Print summary
-        print(f"\n{'='*100}")
+        print(f"\n{'='*110}")
         print("SUMMARY RESULTS")
-        print(f"{'='*100}")
-        print(f"{'Loss Type':<15} {'Batch Size':<10} {'Harrell C':<10} {'Uno C':<10} {'Cum AUC':<10} {'Brier':<10}")
-        print("-" * 90)
+        print(f"{'='*110}")
+        print(f"{'Loss Type':<15} {'Batch Size':<10} {'Harrell C':<10} {'Uno C':<10} {'Cum AUC':<10} {'Inc AUC':<10} {'Brier':<10}")
+        print("-" * 100)
         
         for result in results:
             if 'error' not in result:
@@ -448,6 +466,7 @@ def main():
                       f"{metrics.get('harrell_cindex', 0.0):<10.4f} "
                       f"{metrics.get('uno_cindex', 0.0):<10.4f} "
                       f"{metrics.get('cumulative_auc', 0.0):<10.4f} "
+                      f"{metrics.get('incident_auc', 0.0):<10.4f} "
                       f"{metrics.get('brier_score', float('nan')):<10.4f}")
             else:
                 print(f"{result['loss_type']:<15} {result['batch_size']:<10} ERROR: {result['error']}")

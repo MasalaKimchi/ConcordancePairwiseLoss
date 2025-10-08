@@ -49,30 +49,6 @@ python benchmarks/benchmark_survmnist.py --compare-all --limit-train-batches 0.2
 | `--compare-all` | flag | False | Run comparison across all configurations |
 | `--batch-sizes` | list | [32,64,128,256] | Batch sizes for comparison |
 
-## Output Files
-
-The script generates JSON output files with all metrics and metadata:
-
-### JSON Results (`mnist_batch_<batch_size>_YYYYMMDD_HHMMSS.json`)
-Complete results with all metrics:
-```json
-[
-  {
-    "loss_type": "cpl_online",
-    "batch_size": 64,
-    "epochs": 5,
-    "temperature": 1.0,
-    "metrics": {
-      "harrell_cindex": 0.7234,
-      "uno_cindex": 0.7456,
-      "cumulative_auc": 0.7123,
-      "brier_score": 0.2345
-    }
-  }
-]
-```
-
-For comparison mode (--compare-all), the filename is `mnist_batch_YYYYMMDD_HHMMSS.json` (without specific batch size).
 
 ## Key Differences from Original TorchSurv Example
 
@@ -86,7 +62,7 @@ For comparison mode (--compare-all), the filename is `mnist_batch_YYYYMMDD_HHMMS
 
 ### 3. **Evaluation Metrics**
 - Original: Basic C-index only
-- Enhanced: Harrell's C, Uno's C, Cumulative AUC, Brier Score
+- Enhanced: Harrell's C, Uno's C, Cumulative AUC, Incident AUC (t=5.0), Brier Score
 
 ### 4. **IPCW Handling**
 - Original: Not applicable
