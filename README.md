@@ -140,9 +140,33 @@ python benchmarks/benchmark_MIMIC_v2.py \
 - Comprehensive evaluation metrics explanation
 - Troubleshooting and best practices
 
+### SurvMNIST (Synthetic Survival Dataset)
+
+```bash
+# Run single experiment with default parameters (NLL, batch_size=64, epochs=2)
+python benchmarks/benchmark_survmnist.py
+
+# Run comprehensive comparison across all loss types and batch sizes
+python benchmarks/benchmark_survmnist.py --compare-all
+```
+
+**Key Features**:
+- **Synthetic survival data** from MNIST digits with 30% censoring rate
+- **Quick benchmarking**: Ideal for rapid prototyping and algorithm validation
+- **Multiple loss comparisons**: NLL, CPL(online), CPL(offline)
+- **Configurable batch sizes**: 32, 64, 128, 256
+- **Comprehensive metrics**: Harrell's C, Uno's C, Cumulative AUC, Brier Score
+
+**For detailed usage and configuration**, see [src/survmnist/README.md](src/survmnist/README.md) which includes:
+- Dataset configuration and censoring methodology
+- Loss function variants explanation
+- Command-line arguments reference
+- Output format specifications
+
 ### Available Datasets
 - **Large tabular**: FLChain (7,874), SUPPORT2 (8,873)
 - **Medium tabular**: GBSG2 (686), WHAS500 (500), METABRIC (1,903)
+- **Synthetic imaging**: SurvMNIST (MNIST-based survival, 60k train / 10k test, 30% censoring)
 - **Medical Imaging**: MIMIC-IV Chest X-ray (~300k images)
 
 ### Statistical Analysis
@@ -172,6 +196,10 @@ ConcordancePairwiseLoss/
 │   │   ├── model_loader.py                 # Model loading utilities
 │   │   ├── util.py                         # Benchmark utilities and trainers
 │   │   └── README.md                       # ⭐ MIMIC-IV comprehensive guide
+│   ├── survmnist/                          # SurvMNIST synthetic survival module
+│   │   ├── __init__.py                     # Module interface
+│   │   ├── survival_mnist_dataset.py       # MNIST-based survival dataset
+│   │   └── README.md                       # ⭐ SurvMNIST usage guide
 │   ├── abstract_data_loader.py             # Base class for dataset loaders
 │   ├── data_loaders.py                     # Tabular dataset implementations
 │   ├── dataset_configs.py                  # Dataset metadata utilities
@@ -179,8 +207,10 @@ ConcordancePairwiseLoss/
 ├── benchmarks/                             # Benchmark scripts (V2 - Current)
 │   ├── benchmark_tabular_v2.py             # ⭐ Tabular datasets benchmark
 │   ├── benchmark_MIMIC_v2.py               # ⭐ MIMIC-IV imaging benchmark
+│   ├── benchmark_survmnist.py              # ⭐ SurvMNIST synthetic benchmark
 │   └── dataset_configs.json                # Dataset-specific configurations
 ├── data/                                   # Data storage
+│   ├── MNIST/                              # MNIST raw data (auto-downloaded)
 │   └── mimic/                              # MIMIC-IV CSV files
 ├── results/                                # Benchmark results and trained models
 │   ├── models/                             # Saved model checkpoints
@@ -198,6 +228,11 @@ ConcordancePairwiseLoss/
   - Performance optimization tips
   - Comprehensive evaluation metrics
   - Troubleshooting and best practices
+- **src/survmnist/README.md**: SurvMNIST synthetic survival benchmark guide
+  - Dataset configuration and censoring methodology
+  - Loss function variants (NLL, CPL online/offline)
+  - Command-line arguments and usage examples
+  - Output format specifications
 
 ## References and Acknowledgements
 
