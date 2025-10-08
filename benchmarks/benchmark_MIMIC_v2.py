@@ -5,7 +5,6 @@ MIMIC-IV Chest X-ray Survival Analysis Benchmark V2 (with Comprehensive Evaluati
 This benchmark combines training and comprehensive evaluation in a single run:
 1. Trains models with different loss functions (NLL, CPL, CPL(ipcw), CPL(ipcw batch))
 2. Evaluates with comprehensive metrics during training (not just after saving)
-3. Uses the same evaluation approach as evaluate_saved_models.py
 
 Comprehensive metrics include:
 - Harrell's C-index

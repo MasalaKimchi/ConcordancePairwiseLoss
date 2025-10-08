@@ -3,6 +3,12 @@ SurvivalMNIST Dataset Implementation
 
 A simple synthetic dataset based on MNIST digits adapted for survival analysis.
 This is perfect for quick prototyping and testing imaging survival methods.
+
+Dataset Configuration:
+- Default censoring rate: 30% (0.3)
+- Censoring applied reproducibly using sample index as seed
+- Censoring times randomly drawn between 1 and true survival time
+- Creates realistic survival data where IPCW weights are meaningful
 """
 
 import torch
@@ -126,6 +132,11 @@ class TorchSurvMNISTDataset(Dataset):
     - Digit 0 becomes time=10 (to prevent log(0))
     - Digits 1-9 become time=1-9
     - Introduces censoring to make IPCW meaningful
+    
+    Censoring Mechanism (Default: 30%):
+    - Reproducible censoring using sample index as random seed
+    - Censoring times drawn uniformly from [1, survival_time]
+    - Creates realistic survival data where IPCW is necessary
     """
     
     def __init__(

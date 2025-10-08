@@ -4,7 +4,7 @@ Enhanced TorchSurv MNIST Training Script with CPL Loss Support
 
 This script follows the TorchSurv momentum example pattern but adds support for:
 - Configurable batch sizes (32, 64, 128, 256)
-- Multiple loss functions: NLL, CPL, CPL(IPCW), CPL(IPCW batch)
+- Multiple loss functions: NLL, CPL(online), CPL(offline)
 - Proper C-index computation (Harrell's and Uno's)
 - AUC metrics for survival analysis
 - 5 epochs training
@@ -17,7 +17,6 @@ import sys
 import os
 import argparse
 import json
-import csv
 from datetime import datetime
 from typing import Dict, Any, Optional, Tuple
 import warnings
@@ -34,10 +33,10 @@ from torchsurv.metrics.auc import Auc
 from torchsurv.metrics.brier_score import BrierScore
 from torchsurv.stats.ipcw import get_ipcw
 
-# Add src to path for CPL imports
-sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
+# Add src to path for imports
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'src'))
 from concordance_pairwise_loss import ConcordancePairwiseLoss
-from src.survival_mnist_dataset import create_torchsurv_mnist_loaders
+from survmnist import create_torchsurv_mnist_loaders
 
 # Set random seeds for reproducibility
 from lightning.pytorch import seed_everything
@@ -72,21 +71,14 @@ class LitMNISTEnhanced(L.LightningModule):
         """Initialize loss functions based on loss_type."""
         if self.loss_type == "nll":
             self.loss_fn = None  # Use neg_partial_log_likelihood directly
-        elif self.loss_type == "cpl":
-            self.loss_fn = ConcordancePairwiseLoss(
-                reduction="mean",
-                temp_scaling='linear',
-                pairwise_sampling='balanced',
-                use_ipcw=False
-            )
-        elif self.loss_type == "cpl_ipcw":
+        elif self.loss_type == "cpl_online":
             self.loss_fn = ConcordancePairwiseLoss(
                 reduction="mean",
                 temp_scaling='linear',
                 pairwise_sampling='balanced',
                 use_ipcw=True
             )
-        elif self.loss_type == "cpl_ipcw_batch":
+        elif self.loss_type == "cpl_offline":
             # For batch variant, we'll compute IPCW on the current batch
             # rather than using precomputed weights to avoid tensor size issues
             self.loss_fn = ConcordancePairwiseLoss(
@@ -289,7 +281,7 @@ def run_experiment(
     
     # Precompute IPCW weights for batch variant
     precomputed_ipcw_weights = None
-    if loss_type == "cpl_ipcw_batch":
+    if loss_type == "cpl_offline":
         print("Precomputing IPCW weights from full training set...")
         precomputed_ipcw_weights = precompute_ipcw_weights(train_loader)
         print(f"Precomputed IPCW weights for {len(precomputed_ipcw_weights)} training samples")
@@ -354,8 +346,8 @@ def run_experiment(
 def run_batch_size_comparison(
     batch_sizes: list = [32, 64, 128, 256],
     epochs: int = 5,
-    loss_types: list = ["nll", "cpl", "cpl_ipcw", "cpl_ipcw_batch"],
-    temperatures: list = [0.5, 1.0],
+    loss_types: list = ["nll", "cpl_online", "cpl_offline"],
+    temperatures: list = [1.0],
     output_dir: str = "results",
     limit_train_batches: float = 0.1
 ) -> Dict[str, Any]:
@@ -398,48 +390,21 @@ def run_batch_size_comparison(
     return all_results
 
 
-def save_results(results: list, output_dir: str):
-    """Save results to JSON and CSV files."""
+def save_results(results: list, output_dir: str, batch_size: int = None):
+    """Save results to JSON file."""
     os.makedirs(output_dir, exist_ok=True)
     
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     
     # Save JSON
-    json_filename = f"mnist_survival_results_{timestamp}.json"
+    if batch_size is not None:
+        json_filename = f"mnist_batch_{batch_size}_{timestamp}.json"
+    else:
+        json_filename = f"mnist_batch_{timestamp}.json"
     json_path = os.path.join(output_dir, json_filename)
     with open(json_path, 'w') as f:
         json.dump(results, f, indent=2)
     print(f"JSON results saved: {json_path}")
-    
-    # Save CSV
-    csv_filename = f"mnist_survival_results_{timestamp}.csv"
-    csv_path = os.path.join(output_dir, csv_filename)
-    
-    with open(csv_path, 'w', newline='') as f:
-        writer = csv.writer(f)
-        
-        # Write header
-        writer.writerow([
-            'loss_type', 'batch_size', 'epochs', 'temperature',
-            'harrell_cindex', 'uno_cindex', 'cumulative_auc', 'brier_score', 'error'
-        ])
-        
-        # Write data
-        for result in results:
-            metrics = result.get('metrics', {})
-            writer.writerow([
-                result['loss_type'],
-                result['batch_size'],
-                result['epochs'],
-                result['temperature'],
-                metrics.get('harrell_cindex', float('nan')),
-                metrics.get('uno_cindex', float('nan')),
-                metrics.get('cumulative_auc', float('nan')),
-                metrics.get('brier_score', float('nan')),
-                result.get('error', '')
-            ])
-    
-    print(f"CSV results saved: {csv_path}")
 
 
 def main():
@@ -447,7 +412,7 @@ def main():
     parser = argparse.ArgumentParser(description="Enhanced TorchSurv MNIST Training with CPL Support")
     parser.add_argument('--batch-size', type=int, default=64, help='Batch size for training')
     parser.add_argument('--epochs', type=int, default=2, help='Number of training epochs')
-    parser.add_argument('--loss-type', choices=['nll', 'cpl', 'cpl_ipcw', 'cpl_ipcw_batch'], 
+    parser.add_argument('--loss-type', choices=['nll', 'cpl_online', 'cpl_offline'], 
                        default='nll', help='Loss function type')
     parser.add_argument('--temperature', type=float, default=1.0, help='Temperature for CPL losses')
     parser.add_argument('--output-dir', type=str, default='results', help='Output directory')
@@ -499,10 +464,11 @@ def main():
         )
         
         # Save single result
-        save_results([result], args.output_dir)
+        save_results([result], args.output_dir, batch_size=args.batch_size)
     
     print("\nAll experiments completed successfully!")
 
 
 if __name__ == "__main__":
     main()
+
