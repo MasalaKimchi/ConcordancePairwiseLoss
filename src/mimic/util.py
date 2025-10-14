@@ -228,7 +228,6 @@ class MIMICBenchmarkTrainer:
         
         # Pre-initialize loss functions for efficiency
         from concordance_pairwise_loss import ConcordancePairwiseLoss
-        from concordance_pairwise_loss.dynamic_weighting import NormalizedLossCombination
         
         self.cpl_loss = ConcordancePairwiseLoss(
             reduction="mean",
