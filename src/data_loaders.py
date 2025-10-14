@@ -25,7 +25,7 @@ class AbstractDataLoader(ABC):
 
 
 # Import MIMIC loader after defining AbstractDataLoader to avoid circular imports
-from mimic.mimic_data_loader import MIMICDataLoader
+# from mimic.mimic_data_loader import MIMICDataLoader  # Commented out to avoid circular import
 
 
 class GBSG2DataLoader(AbstractDataLoader):
@@ -401,6 +401,6 @@ DATA_LOADERS = {
     'survival_mnist': SurvivalMNISTDataLoader,
     'support2': SUPPORT2DataLoader,
     'metabric': METABRICDataLoader,
-    'mimic': MIMICDataLoader,
+    # 'mimic': MIMICDataLoader,  # Commented out to avoid circular import
 }
 

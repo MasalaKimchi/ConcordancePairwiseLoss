@@ -250,6 +250,7 @@ logs/
 outputs/
 results/
 results-batch-64/
+results-batch-256/
 
 # Temporary experiment files
 temp/

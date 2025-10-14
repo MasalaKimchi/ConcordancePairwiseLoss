@@ -231,7 +231,7 @@ class PreprocessedMIMICBenchmarkRunnerV2(MIMICBenchmarkRunner):
         print("MIMIC-IV CHEST X-RAY SURVIVAL ANALYSIS BENCHMARK V2")
         print("Training + Comprehensive Evaluation (Single Run)")
         print("=" * 80)
-        print(f"Core Loss Functions: NLL, CPL, CPL(ipcw), CPL(ipcw batch)")
+        print(f"Core Loss Functions: NLL, CPL(ipcw), CPL(ipcw batch)")
         print(f"Multiple Runs: {self.num_runs} independent runs per configuration")
         print(f"Data fraction: {self.data_fraction * 100:.1f}%")
         print(f"Comprehensive Metrics: Harrell's C, Uno's C, Cumulative AUC, Incident AUC, Brier Score")
@@ -281,7 +281,7 @@ class PreprocessedMIMICBenchmarkRunnerV2(MIMICBenchmarkRunner):
         self.dataloader_test = dataloader_test
         
         # Test each loss type
-        loss_types = ['nll', 'cpl', 'cpl_ipcw', 'cpl_ipcw_batch']
+        loss_types = ['nll', 'cpl_ipcw', 'cpl_ipcw_batch']
         
         results = {}
         
@@ -474,7 +474,6 @@ class PreprocessedMIMICBenchmarkRunnerV2(MIMICBenchmarkRunner):
         # Method name mapping (from benchmark_tabular_v2.py)
         method_names = {
             'nll': 'NLL',
-            'cpl': 'CPL',
             'cpl_ipcw': 'CPL (ipcw)',
             'cpl_ipcw_batch': 'CPL (ipcw batch)'
         }
@@ -582,7 +581,6 @@ class PreprocessedMIMICBenchmarkRunnerV2(MIMICBenchmarkRunner):
         # Method name mapping
         method_names = {
             'nll': 'NLL',
-            'cpl': 'CPL',
             'cpl_ipcw': 'CPL (ipcw)',
             'cpl_ipcw_batch': 'CPL (ipcw batch)'
         }
@@ -650,10 +648,10 @@ def main():
     parser.add_argument('--weight-decay', type=float, default=1e-5, help='Weight decay')
     parser.add_argument('--patience', type=int, default=10, help='Early stopping patience')
     parser.add_argument('--max-steps', type=int, default=100000, help='Maximum training steps')
-    parser.add_argument('--batch-size', type=int, default=64, help='Batch size')
+    parser.add_argument('--batch-size', type=int, default=256, help='Batch size')
     parser.add_argument('--num-workers', type=int, default=12, help='Number of data loading workers')
     parser.add_argument('--enable-augmentation', action='store_true', help='Enable data augmentation')
-    parser.add_argument('--output-dir', type=str, default='results-batch-64', help='Output directory')
+    parser.add_argument('--output-dir', type=str, default='results-batch-256', help='Output directory')
     parser.add_argument('--seed', type=int, default=42, help='Random seed')
     parser.add_argument('--num-runs', type=int, default=1, help='Number of independent runs per loss type')
     
