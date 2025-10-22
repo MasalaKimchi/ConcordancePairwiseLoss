@@ -16,11 +16,11 @@ This enhanced version of the TorchSurv MNIST training script adds support for mu
 # Run with default parameters (NLL, batch_size=64, epochs=2)
 python benchmarks/benchmark_survmnist.py
 
-# Run with CPL (online) - IPCW computed per batch
-python benchmarks/benchmark_survmnist.py --loss-type cpl_online --batch-size 64 --epochs 5
+# Run with CPL (dynamic) - IPCW computed per batch
+python benchmarks/benchmark_survmnist.py --loss-type cpl_dynamic --batch-size 64 --epochs 5
 
-# Run with CPL (offline) - IPCW precomputed from full training set
-python benchmarks/benchmark_survmnist.py --loss-type cpl_offline --batch-size 64 --epochs 5
+# Run with CPL (static) - IPCW precomputed from full training set
+python benchmarks/benchmark_survmnist.py --loss-type cpl_static --batch-size 64 --epochs 5
 ```
 
 ### Comprehensive Comparison
@@ -42,7 +42,7 @@ python benchmarks/benchmark_survmnist.py --compare-all --limit-train-batches 0.2
 |----------|------|---------|-------------|
 | `--batch-size` | int | 64 | Batch size for training |
 | `--epochs` | int | 2 | Number of training epochs |
-| `--loss-type` | str | nll | Loss function: nll, cpl_online, cpl_offline |
+| `--loss-type` | str | nll | Loss function: nll, cpl_dynamic, cpl_static |
 | `--temperature` | float | 1.0 | Temperature for CPL losses |
 | `--output-dir` | str | results | Output directory for results |
 | `--limit-train-batches` | float | 0.1 | Fraction of training data to use |
@@ -54,7 +54,7 @@ python benchmarks/benchmark_survmnist.py --compare-all --limit-train-batches 0.2
 
 ### 1. **Loss Function Support**
 - Original: Only NLL (Cox loss)
-- Enhanced: NLL + 2 CPL variants (online/offline)
+- Enhanced: NLL + 2 CPL variants (dynamic/static)
 
 ### 2. **Batch Size Configuration**
 - Original: Fixed 500 (GPU) / 50 (CPU)

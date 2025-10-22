@@ -153,7 +153,7 @@ python benchmarks/benchmark_survmnist.py --compare-all
 **Key Features**:
 - **Synthetic survival data** from MNIST digits with 30% censoring rate
 - **Quick benchmarking**: Ideal for rapid prototyping and algorithm validation
-- **Multiple loss comparisons**: NLL, CPL(online), CPL(offline)
+- **Multiple loss comparisons**: NLL, CPL(dynamic), CPL(static)
 - **Configurable batch sizes**: 32, 64, 128, 256
 - **Comprehensive metrics**: Harrell's C, Uno's C, Cumulative AUC, Incident AUC, Brier Score
 
@@ -263,7 +263,7 @@ ConcordancePairwiseLoss/
   - Troubleshooting and best practices
 - **src/survmnist/README.md**: SurvMNIST synthetic survival benchmark guide
   - Dataset configuration and censoring methodology
-  - Loss function variants (NLL, CPL online/offline)
+  - Loss function variants (NLL, CPL dynamic/static)
   - Command-line arguments and usage examples
   - Output format specifications
 
