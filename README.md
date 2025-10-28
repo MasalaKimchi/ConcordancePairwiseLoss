@@ -148,10 +148,10 @@ Our MIMIC-IV preprocessing methodology follows the established approach from:
 - **DiffSurv**: [Andre Vauvelle's DiffSurv preprocessing](https://github.com/andre-vauvelle/diffsurv/blob/main/src/data/preprocess/preprocess_mimic_cxr.py)
 - **MIMIC-IV**: [PhysioNet MIMIC-IV](https://physionet.org/content/mimiciv/)
 - **MIMIC-CXR-JPG**: [MIMIC-CXR Database](https://physionet.org/content/mimic-cxr-jpg/2.1.0/)
-- **Tabular Datasets**: FLChain, SUPPORT2, GBSG2, WHAS500, METABRIC
+- **Tabular Datasets**: FLChain, SUPPORT2, GBSG2, METABRIC
 - **PyTorch**: Deep learning framework
-- **TorchSurv**: Survival analysis metrics and losses
-- **MONAI**: Medical Open Network for AI (optimized medical image processing)
+- **TorchSurv**: [Survival analysis metrics and losses](https://github.com/Novartis/torchsurv)
+- **MONAI**: [Medical Open Network for AI](https://github.com/Project-MONAI/MONAI)
 - **lifelines**: Survival analysis in Python
 - **scikit-survival**: Machine learning for survival analysis
 
