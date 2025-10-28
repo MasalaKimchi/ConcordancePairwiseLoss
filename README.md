@@ -1,6 +1,6 @@
 # ConcordancePairwiseLoss
 
-A pairwise loss function for survival analysis that improves concordance between predicted and actual survival times by comparing pairs of samples.
+A concordance pairwise logistic loss function for survival analysis that directly optimizes concordance.
 
 ## Quick Start
 
@@ -88,7 +88,7 @@ python benchmarks/benchmark_tabular_v2.py --dataset all --epochs 30 --num-runs 1
 python benchmarks/benchmark_MIMIC_v2.py \
     --epochs 50 \
     --batch-size 64 \
-    --num-runs 3 \
+    --num-runs 1 \
     --output-dir results
 ```
 
@@ -97,36 +97,7 @@ python benchmarks/benchmark_MIMIC_v2.py \
 - 🖼️ **Step 2**: Preprocess images to RGB 224×224: `python src/mimic/preprocess_images.py`
 - 🎯 **Step 3**: Run benchmark (commands above)
 
-**For detailed setup and usage**, see [src/mimic/README.md](src/mimic/README.md) which includes:
-- Complete preprocessing workflow (6-8 hours one-time setup)
-- MONAI-optimized data loading configuration
-- Performance optimization guidelines
-- Comprehensive evaluation metrics explanation
-
-### SurvMNIST (Synthetic Survival Dataset)
-
-```bash
-# Run single experiment with default parameters (NLL, batch_size=64, epochs=2)
-python benchmarks/benchmark_survmnist.py
-
-# Run comprehensive comparison across all loss types and batch sizes
-python benchmarks/benchmark_survmnist.py --compare-all
-```
-
-**Key Features**:
-- **Synthetic survival data** from MNIST digits with 30% censoring rate
-- **Quick benchmarking**: Ideal for rapid prototyping and algorithm validation
-- **Multiple loss comparisons**: NLL, CPL(dynamic), CPL(static)
-- **Configurable batch sizes**: 32, 64, 128, 256
-- **Comprehensive metrics**: Harrell's C, Uno's C, Cumulative AUC, Incident AUC, Brier Score
-
-
-### Available Datasets
-- **Medical Imaging**: MIMIC-IV Chest X-ray (~300k images)
-- **Large tabular**: FLChain (7,874), SUPPORT2 (8,873)
-- **Medium tabular**: GBSG2 (686), METABRIC (1,903)
-- **Synthetic imaging**: SurvMNIST (MNIST-based survival, 60k train / 10k test, 30% censoring)
-
+**For detailed setup and usage**, see [src/mimic/README.md](src/mimic/README.md)
 
 ## Project Structure
 
@@ -169,27 +140,12 @@ ConcordancePairwiseLoss/
 └── README.md                               # ⭐ This file (main documentation)
 ```
 
-## Documentation Hierarchy
-
-- **README.md** (This file): Main project overview, installation, quick start, benchmarks, and references
-- **src/mimic/README.md**: Comprehensive MIMIC-IV chest X-ray integration guide
-  - Complete 3-step preprocessing workflow
-  - MONAI-optimized data loading configuration
-  - Performance optimization tips
-  - Comprehensive evaluation metrics
-  - Troubleshooting and best practices
-- **src/survmnist/README.md**: SurvMNIST synthetic survival benchmark guide
-  - Dataset configuration and censoring methodology
-  - Loss function variants (NLL, CPL dynamic/static)
-  - Command-line arguments and usage examples
-  - Output format specifications
-
 ## References and Acknowledgements
 
 Our MIMIC-IV preprocessing methodology follows the established approach from:
 - **DiffSurv**: [Andre Vauvelle's DiffSurv preprocessing](https://github.com/andre-vauvelle/diffsurv/blob/main/src/data/preprocess/preprocess_mimic_cxr.py)
 - **MIMIC-IV**: [PhysioNet MIMIC-IV](https://physionet.org/content/mimiciv/)
-- **MIMIC-CXR**: [MIMIC-CXR Database](https://physionet.org/content/mimic-cxr/)
+- **MIMIC-CXR-JPG**: [MIMIC-CXR Database](https://physionet.org/content/mimic-cxr-jpg/2.1.0/)
 - **Tabular Datasets**: FLChain, SUPPORT2, GBSG2, WHAS500, METABRIC
 - **PyTorch**: Deep learning framework
 - **TorchSurv**: Survival analysis metrics and losses

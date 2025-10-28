@@ -111,3 +111,28 @@ python benchmarks/benchmark_survmnist.py --compare-all --limit-train-batches 0.2
 ### 5. **Results Saving**
 - Original: No persistent results
 - Enhanced: JSON output with comprehensive metrics
+
+
+### SurvMNIST (Synthetic Survival Dataset)
+
+```bash
+# Run single experiment with default parameters (NLL, batch_size=64, epochs=2)
+python benchmarks/benchmark_survmnist.py
+
+# Run comprehensive comparison across all loss types and batch sizes
+python benchmarks/benchmark_survmnist.py --compare-all
+```
+
+**Key Features**:
+- **Synthetic survival data** from MNIST digits with 30% censoring rate
+- **Quick benchmarking**: Ideal for rapid prototyping and algorithm validation
+- **Multiple loss comparisons**: NLL, CPL(dynamic), CPL(static)
+- **Configurable batch sizes**: 32, 64, 128, 256
+- **Comprehensive metrics**: Harrell's C, Uno's C, Cumulative AUC, Incident AUC, Brier Score
+
+
+### Available Datasets
+- **Medical Imaging**: MIMIC-IV Chest X-ray (~300k images)
+- **Large tabular**: FLChain (7,874), SUPPORT2 (8,873)
+- **Medium tabular**: GBSG2 (686), METABRIC (1,903)
+- **Synthetic imaging**: SurvMNIST (MNIST-based survival, 60k train / 10k test, 30% censoring)
