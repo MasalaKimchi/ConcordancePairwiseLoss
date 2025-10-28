@@ -2,6 +2,46 @@
 
 This enhanced version of the TorchSurv MNIST training script adds support for multiple loss functions, configurable batch sizes, and comprehensive evaluation metrics.
 
+#### Dataset Creation Methodology
+
+The SurvMNIST dataset converts MNIST handwritten digits into a survival analysis problem using a direct mapping approach:
+
+**Survival Time Assignment:**
+- Each MNIST digit (0-9) is mapped to a survival time
+- Digit 0 → survival time = 10 (to avoid log(0) issues in Cox models)
+- Digits 1-9 → survival time = digit value (1, 2, 3, ..., 9)
+- **Time range**: All survival times fall between 1 and 10 units
+
+**Censoring Mechanism (30% rate):**
+1. For each sample at index `i`, uses `random.seed(i)` for reproducibility
+2. Determines censoring: `is_censored = random.random() < 0.3`
+3. If censored (30% of samples):
+   - Event indicator: `event = False`
+   - Observed time: `random.uniform(1.0, true_survival_time)` 
+   - Censoring occurs before the event
+4. If not censored (70% of samples):
+   - Event indicator: `event = True`
+   - Observed time: `true_survival_time`
+
+**Why This Design?**
+- **Simplicity**: Direct digit-to-time mapping makes the problem interpretable
+- **Reproducibility**: Index-based seeding ensures consistent train/test splits
+- **IPCW Relevance**: 30% censoring rate creates sufficient censored data for IPCW weighting
+- **Model Testing**: Known ground truth allows validation of survival model predictions
+- **Quick Iteration**: MNIST's fast loading enables rapid algorithm development
+
+**Dataset Statistics:**
+- Training samples: 60,000 (42,000 events / 18,000 censored)
+- Test samples: 10,000 (7,000 events / 3,000 censored)
+- Survival time distribution: Depends on digit frequency in MNIST
+- Image size: 28×28 grayscale, resized to 224×224 for ResNet
+
+**For detailed usage and configuration**, see [src/survmnist/README.md](src/survmnist/README.md) which includes:
+- Dataset configuration and censoring methodology
+- Loss function variants explanation
+- Command-line arguments reference
+- Output format specifications
+
 ## Dataset Configuration
 
 **Default Censoring Rate**: 30% (0.3)
