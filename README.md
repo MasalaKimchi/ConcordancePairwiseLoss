@@ -1,6 +1,10 @@
-# ConcordancePairwiseLoss
+# HOW TO OPTIMIZE CONCORDANCE IN MEDICAL IMAGING FOR DEEP SURVIVAL ANALYSIS? CONCORDANCE PAIRWISE LOGISTIC LOSS
 
-A concordance pairwise logistic loss function for survival analysis that directly optimizes concordance.
+*Submitted to ISBI 2026*
+
+## Abstract
+
+Deep survival analysis in medical imaging traditionally relies on Cox proportional hazards with negative partial log-likelihood (NLL), which optimizes likelihood rather than di-rectly targeting concordance, the fundamental ranking metric for risk prediction. This disconnect is amplified in medical imag-ing, where high-resolution images force memory-constrained small batches, destabilizing NLL’s risk-set-based gradients. Here, we introduce Concordance Pairwise Logistic Loss (CPL), a novel objective that directly optimizes pairwise ranking con-cordance by penalizing incorrect risk orderings between compa-rable sample pairs. CPL integrates inverse probability of cen-soring weights (IPCW) through dynamic (batch-computed) and static (precomputed) strategies to handle informative censor-ing. We evaluated CPL and NLL on the largest chest X-ray da-taset MIMIC-CXR. Results show that CPL with dynamic IPCW consistently outperformed NLL in discrimination, especially in memory-constrained small-batch scenarios (batch size=32), achieving Harrell's C-index of 0.737 and Uno's C-index of 0.712 compared to NLL (Harrell's C=0.730, Uno's C=0.705). Importantly, CPL demonstrates improved stability across batch sizes, with its performance varying 2.4 times less than NLL (average CV 0.185% vs. 0.453%). By directly aligning the train-ing objective with rank-based evaluation, CPL offers a more robust and effective solution for developing deep survival models where accurate patient risk ranking is critical.
 
 ## Quick Start
 
