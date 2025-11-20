@@ -251,6 +251,7 @@ outputs/
 results/
 results-batch-64/
 results-batch-256/
+results-batch-32/
 
 # Temporary experiment files
 temp/
