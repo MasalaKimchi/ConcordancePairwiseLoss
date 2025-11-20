@@ -1,5 +1,5 @@
 # Core deep learning and scientific computing packages
-torch>=2.0.0
+torch>=2.5.0
 numpy>=1.21.0
 
 # Medical imaging and optimized data loading
@@ -8,7 +8,7 @@ torchvision>=0.15.0
 pillow>=9.0.0
 
 # Survival analysis specific packages
-torchsurv>=0.1.0
+torchsurv>=0.1.5
 lifelines>=0.27.0
 scikit-survival>=0.22.0
 SurvSet>=0.2.0

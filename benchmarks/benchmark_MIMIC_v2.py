@@ -656,7 +656,7 @@ def main():
     parser.add_argument('--batch-size', type=int, default=256, help='Batch size')
     parser.add_argument('--num-workers', type=int, default=12, help='Number of data loading workers')
     parser.add_argument('--enable-augmentation', action='store_true', help='Enable data augmentation')
-    parser.add_argument('--output-dir', type=str, default='results-batch-256', help='Output directory')
+    parser.add_argument('--output-dir', type=str, default='results-ccl-256', help='Output directory')
     parser.add_argument('--seed', type=int, default=42, help='Random seed')
     parser.add_argument('--num-runs', type=int, default=1, help='Number of independent runs per loss type')
     parser.add_argument('--loss-types', type=str, nargs='+', 
