@@ -1,6 +1,8 @@
-# ConcordancePairwiseLoss
+# HOW TO OPTIMIZE CONCORDANCE IN MEDICAL IMAGING FOR DEEP SURVIVAL ANALYSIS? CONCORDANCE PAIRWISE LOGISTIC LOSS
 
-A pairwise loss function for survival analysis that improves concordance between predicted and actual survival times by comparing pairs of samples.
+## Abstract (Submitted to ISBI 2026)
+
+Deep survival analysis in medical imaging traditionally relies on Cox proportional hazards with negative partial log-likelihood (NLL), which optimizes likelihood rather than di-rectly targeting concordance, the fundamental ranking metric for risk prediction. This disconnect is amplified in medical imag-ing, where high-resolution images force memory-constrained small batches, destabilizing NLL’s risk-set-based gradients. Here, we introduce Concordance Pairwise Logistic Loss (CPL), a novel objective that directly optimizes pairwise ranking con-cordance by penalizing incorrect risk orderings between compa-rable sample pairs. CPL integrates inverse probability of cen-soring weights (IPCW) through dynamic (batch-computed) and static (precomputed) strategies to handle informative censor-ing. We evaluated CPL and NLL on the largest chest X-ray da-taset MIMIC-CXR. Results show that CPL with dynamic IPCW consistently outperformed NLL in discrimination, especially in memory-constrained small-batch scenarios (batch size=32), achieving Harrell's C-index of 0.737 and Uno's C-index of 0.712 compared to NLL (Harrell's C=0.730, Uno's C=0.705). Importantly, CPL demonstrates improved stability across batch sizes, with its performance varying 2.4 times less than NLL (average CV 0.185% vs. 0.453%). By directly aligning the train-ing objective with rank-based evaluation, CPL offers a more robust and effective solution for developing deep survival models where accurate patient risk ranking is critical.
 
 ## Quick Start
 
@@ -26,30 +28,14 @@ pip install -r requirements.txt
 - `lifelines>=0.27.0`, `scikit-survival>=0.22.0` - Survival analysis tools
 - See `requirements.txt` for complete list
 
-### Basic Usage
-```python
-from src.concordance_pairwise_loss import ConcordancePairwiseLoss
-
-# Create loss function (uses default settings from all experiments)
-loss_fn = ConcordancePairwiseLoss(
-    temperature=1.0,
-    temp_scaling='linear',      # Default: linear scaling
-    pairwise_sampling='balanced',  # Default: balanced sampling
-    use_ipcw=False
-)
-
-# Use in training
-loss = loss_fn(log_risks, times, events)
-```
-
-### Usage with IPCW (Inverse Probability of Censoring Weights)
+### Basic Usage of CPL with IPCW 
 
 **Note**: All experiments use `temp_scaling='linear'` and `pairwise_sampling='balanced'` as defaults.
 
 ```python
 from src.concordance_pairwise_loss import ConcordancePairwiseLoss
 
-# CPL with dynamic IPCW (computed per batch)
+# CPL (dynamic): CPL with IPCW computed dynamically per batch
 loss_fn_dynamic = ConcordancePairwiseLoss(
     temperature=1.0,
     use_ipcw=True
@@ -57,7 +43,7 @@ loss_fn_dynamic = ConcordancePairwiseLoss(
     # pairwise_sampling='balanced' (default)
 )
 
-# CPL with static IPCW (precomputed from training set)
+# CPL (static): CPL with IPCW weights precomputed from the full training set and reused across batches
 loss_fn_static = ConcordancePairwiseLoss(
     temperature=1.0,
     use_ipcw=True,
@@ -67,20 +53,6 @@ loss_fn_static = ConcordancePairwiseLoss(
 )
 ```
 
-## Methods
-
-### Loss Function Variants
-
-- **NLL (Negative Partial Log-Likelihood)**: Traditional Cox proportional hazards partial log-likelihood loss
-- **CPL (Concordance Pairwise Loss)**: Directly optimizes concordance via pairwise ranking
-- **CPL (dynamic)**: CPL with Inverse Probability of Censoring Weights (IPCW) computed dynamically per batch
-- **CPL (static)**: CPL with IPCW weights precomputed from the full training set and reused across batches
-
-**Configuration for All Experiments**:
-- Temperature scaling: `temp_scaling='linear'`
-- Pairwise sampling: `pairwise_sampling='balanced'` (higher weight for event-event pairs)
-- Reduction: `reduction='mean'` (weight-normalized)
-
 ### Terminology Mapping
 
 For clarity in documentation and code:
@@ -88,7 +60,6 @@ For clarity in documentation and code:
 | **Documentation Name** | **Code Name** | **Description** |
 |------------------------|---------------|-----------------|
 | NLL | `nll` | Cox proportional hazards loss |
-| CPL | `cpl` | Base concordance pairwise loss |
 | CPL (dynamic) | `cpl_ipcw` | IPCW computed per batch |
 | CPL (static) | `cpl_ipcw_batch` | IPCW precomputed once |
 
@@ -111,11 +82,6 @@ python benchmarks/benchmark_tabular_v2.py --dataset gbsg2 --epochs 30 --num-runs
 python benchmarks/benchmark_tabular_v2.py --dataset all --epochs 30 --num-runs 10
 ```
 
-**Key Features**:
-- Tests 4 core loss functions: NLL, CPL, CPL (dynamic), CPL (static)
-- Hyperparameter grid search across learning rates and hidden dimensions
-- Multiple independent runs for statistical robustness
-- Comprehensive metrics: Harrell's C, Uno's C, Cumulative AUC, Incident AUC, Brier Score
 
 ### Medical Imaging (MIMIC-IV)
 
@@ -124,7 +90,7 @@ python benchmarks/benchmark_tabular_v2.py --dataset all --epochs 30 --num-runs 1
 python benchmarks/benchmark_MIMIC_v2.py \
     --epochs 50 \
     --batch-size 64 \
-    --num-runs 3 \
+    --num-runs 1 \
     --output-dir results
 ```
 
@@ -133,83 +99,7 @@ python benchmarks/benchmark_MIMIC_v2.py \
 - 🖼️ **Step 2**: Preprocess images to RGB 224×224: `python src/mimic/preprocess_images.py`
 - 🎯 **Step 3**: Run benchmark (commands above)
 
-**For detailed setup and usage**, see [src/mimic/README.md](src/mimic/README.md) which includes:
-- Complete preprocessing workflow (6-8 hours one-time setup)
-- MONAI-optimized data loading configuration
-- Performance optimization guidelines
-- Comprehensive evaluation metrics explanation
-- Troubleshooting and best practices
-
-### SurvMNIST (Synthetic Survival Dataset)
-
-```bash
-# Run single experiment with default parameters (NLL, batch_size=64, epochs=2)
-python benchmarks/benchmark_survmnist.py
-
-# Run comprehensive comparison across all loss types and batch sizes
-python benchmarks/benchmark_survmnist.py --compare-all
-```
-
-**Key Features**:
-- **Synthetic survival data** from MNIST digits with 30% censoring rate
-- **Quick benchmarking**: Ideal for rapid prototyping and algorithm validation
-- **Multiple loss comparisons**: NLL, CPL(online), CPL(offline)
-- **Configurable batch sizes**: 32, 64, 128, 256
-- **Comprehensive metrics**: Harrell's C, Uno's C, Cumulative AUC, Incident AUC, Brier Score
-
-#### Dataset Creation Methodology
-
-The SurvMNIST dataset converts MNIST handwritten digits into a survival analysis problem using a direct mapping approach:
-
-**Survival Time Assignment:**
-- Each MNIST digit (0-9) is mapped to a survival time
-- Digit 0 → survival time = 10 (to avoid log(0) issues in Cox models)
-- Digits 1-9 → survival time = digit value (1, 2, 3, ..., 9)
-- **Time range**: All survival times fall between 1 and 10 units
-
-**Censoring Mechanism (30% rate):**
-1. For each sample at index `i`, uses `random.seed(i)` for reproducibility
-2. Determines censoring: `is_censored = random.random() < 0.3`
-3. If censored (30% of samples):
-   - Event indicator: `event = False`
-   - Observed time: `random.uniform(1.0, true_survival_time)` 
-   - Censoring occurs before the event
-4. If not censored (70% of samples):
-   - Event indicator: `event = True`
-   - Observed time: `true_survival_time`
-
-**Why This Design?**
-- **Simplicity**: Direct digit-to-time mapping makes the problem interpretable
-- **Reproducibility**: Index-based seeding ensures consistent train/test splits
-- **IPCW Relevance**: 30% censoring rate creates sufficient censored data for IPCW weighting
-- **Model Testing**: Known ground truth allows validation of survival model predictions
-- **Quick Iteration**: MNIST's fast loading enables rapid algorithm development
-
-**Dataset Statistics:**
-- Training samples: 60,000 (42,000 events / 18,000 censored)
-- Test samples: 10,000 (7,000 events / 3,000 censored)
-- Survival time distribution: Depends on digit frequency in MNIST
-- Image size: 28×28 grayscale, resized to 224×224 for ResNet
-
-**For detailed usage and configuration**, see [src/survmnist/README.md](src/survmnist/README.md) which includes:
-- Dataset configuration and censoring methodology
-- Loss function variants explanation
-- Command-line arguments reference
-- Output format specifications
-
-### Available Datasets
-- **Large tabular**: FLChain (7,874), SUPPORT2 (8,873)
-- **Medium tabular**: GBSG2 (686), WHAS500 (500), METABRIC (1,903)
-- **Synthetic imaging**: SurvMNIST (MNIST-based survival, 60k train / 10k test, 30% censoring)
-- **Medical Imaging**: MIMIC-IV Chest X-ray (~300k images)
-
-### Statistical Analysis
-Each benchmark provides comprehensive statistical analysis:
-- **Multi-run support**: Mean ± standard deviation across 10 independent runs
-- **Comprehensive metrics**: Harrell's C-index, Uno's C-index, Cumulative AUC, Incident AUC, Brier Score
-- **Statistical testing**: Pairwise t-tests for significance analysis
-- **Rich visualizations**: Multi-panel analysis plots with fixed dimensions
-- **Professional output**: JSON + CSV + PNG files with timestamps
+**For detailed setup and usage**, see [src/mimic/README.md](src/mimic/README.md)
 
 ## Project Structure
 
@@ -252,44 +142,18 @@ ConcordancePairwiseLoss/
 └── README.md                               # ⭐ This file (main documentation)
 ```
 
-## Documentation Hierarchy
-
-- **README.md** (This file): Main project overview, installation, quick start, benchmarks, and references
-- **src/mimic/README.md**: Comprehensive MIMIC-IV chest X-ray integration guide
-  - Complete 3-step preprocessing workflow
-  - MONAI-optimized data loading configuration
-  - Performance optimization tips
-  - Comprehensive evaluation metrics
-  - Troubleshooting and best practices
-- **src/survmnist/README.md**: SurvMNIST synthetic survival benchmark guide
-  - Dataset configuration and censoring methodology
-  - Loss function variants (NLL, CPL online/offline)
-  - Command-line arguments and usage examples
-  - Output format specifications
-
 ## References and Acknowledgements
 
-### Medical Imaging Preprocessing
 Our MIMIC-IV preprocessing methodology follows the established approach from:
 - **DiffSurv**: [Andre Vauvelle's DiffSurv preprocessing](https://github.com/andre-vauvelle/diffsurv/blob/main/src/data/preprocess/preprocess_mimic_cxr.py)
-- Ensures consistency with established medical imaging research practices
-
-### Datasets
 - **MIMIC-IV**: [PhysioNet MIMIC-IV](https://physionet.org/content/mimiciv/)
-- **MIMIC-CXR**: [MIMIC-CXR Database](https://physionet.org/content/mimic-cxr/)
-- **Tabular Datasets**: FLChain, SUPPORT2, GBSG2, WHAS500, METABRIC
-
-### Frameworks and Libraries
+- **MIMIC-CXR-JPG**: [MIMIC-CXR Database](https://physionet.org/content/mimic-cxr-jpg/2.1.0/)
+- **Tabular Datasets**: FLChain, SUPPORT2, GBSG2, METABRIC
 - **PyTorch**: Deep learning framework
-- **TorchSurv**: Survival analysis metrics and losses
-- **MONAI**: Medical Open Network for AI (optimized medical image processing)
+- **TorchSurv**: [Survival analysis metrics and losses](https://github.com/Novartis/torchsurv)
+- **MONAI**: [Medical Open Network for AI](https://github.com/Project-MONAI/MONAI)
 - **lifelines**: Survival analysis in Python
 - **scikit-survival**: Machine learning for survival analysis
-
-### Key Publications
-- **EfficientNet**: [Rethinking Model Scaling for CNNs](https://arxiv.org/abs/1905.11946) (Tan & Le, 2019)
-- **Medical Image Analysis**: [Best Practices for Medical Imaging](https://www.nature.com/articles/s41591-018-0316-z)
-- **Survival Analysis with Neural Networks**: [Time-to-event prediction with neural networks](https://jmlr.org/papers/v20/18-424.html) (Kvamme et al., 2019)
 
 ## License
 

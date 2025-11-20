@@ -228,6 +228,7 @@ class MIMICBenchmarkTrainer:
         
         # Pre-initialize loss functions for efficiency
         from concordance_pairwise_loss import ConcordancePairwiseLoss
+        from contrastive_cox_loss.loss import ContrastiveCoxLoss
         
         self.cpl_loss = ConcordancePairwiseLoss(
             reduction="mean",
@@ -245,6 +246,16 @@ class MIMICBenchmarkTrainer:
             reduction="mean",
             temp_scaling='linear',
             pairwise_sampling='balanced',
+            use_ipcw=True
+        )
+        
+        # Initialize ContrastiveCoxLoss variants
+        self.ccl_ipcw_loss = ContrastiveCoxLoss(
+            reduction="mean",
+            use_ipcw=True
+        )
+        self.ccl_ipcw_batch_loss = ContrastiveCoxLoss(
+            reduction="mean",
             use_ipcw=True
         )
         
@@ -372,7 +383,7 @@ class MIMICBenchmarkTrainer:
         step_count = 0
         
         # Precompute IPCW weights for batch variant
-        if loss_type == "cpl_ipcw_batch":
+        if loss_type == "cpl_ipcw_batch" or loss_type == "ccl_ipcw_batch":
             self._precompute_ipcw_weights(dataloader_train)
         
         # Create progress bar for epochs
@@ -596,6 +607,11 @@ class MIMICBenchmarkTrainer:
         except ImportError:
             raise ImportError("concordance_pairwise_loss is required. Install the package first.")
         
+        try:
+            from contrastive_cox_loss.loss import ContrastiveCoxLoss
+        except ImportError:
+            raise ImportError("contrastive_cox_loss is required. Install the package first.")
+        
         # Ensure proper shape for NLL
         log_hz_2d = log_hz if log_hz.dim() == 2 else log_hz.unsqueeze(1)
         log_hz_1d = log_hz.squeeze(-1) if log_hz.dim() == 2 else log_hz
@@ -626,6 +642,27 @@ class MIMICBenchmarkTrainer:
                 loss = temp_loss(log_hz_1d, time, event)
             else:
                 loss = self.cpl_ipcw_batch_loss(log_hz_1d, time, event)
+        elif loss_type == "ccl_ipcw":
+            # ContrastiveCoxLoss uses features, so we use log_hz as 1D features
+            # Reshape log_hz to (N, 1) for ContrastiveCoxLoss
+            feats = log_hz_1d.unsqueeze(-1) if log_hz_1d.dim() == 1 else log_hz_1d
+            self.ccl_ipcw_loss.temperature = temperature
+            loss = self.ccl_ipcw_loss(feats, time, event)
+        elif loss_type == "ccl_ipcw_batch":
+            # ContrastiveCoxLoss uses features, so we use log_hz as 1D features
+            # Reshape log_hz to (N, 1) for ContrastiveCoxLoss
+            feats = log_hz_1d.unsqueeze(-1) if log_hz_1d.dim() == 1 else log_hz_1d
+            self.ccl_ipcw_batch_loss.temperature = temperature
+            if self.precomputed_ipcw_weights is not None:
+                temp_loss = ContrastiveCoxLoss(
+                    reduction="mean",
+                    use_ipcw=True,
+                    ipcw_weights=self.precomputed_ipcw_weights
+                )
+                temp_loss.temperature = temperature
+                loss = temp_loss(feats, time, event)
+            else:
+                loss = self.ccl_ipcw_batch_loss(feats, time, event)
         else:
             raise ValueError(f"Unknown loss type: {loss_type}")
         

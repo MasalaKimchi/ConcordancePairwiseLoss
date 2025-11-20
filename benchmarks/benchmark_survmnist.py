@@ -4,7 +4,7 @@ Enhanced TorchSurv MNIST Training Script with CPL Loss Support
 
 This script follows the TorchSurv momentum example pattern but adds support for:
 - Configurable batch sizes (32, 64, 128, 256)
-- Multiple loss functions: NLL, CPL(online), CPL(offline)
+- Multiple loss functions: NLL, CPL(dynamic), CPL(static)
 - Proper C-index computation (Harrell's and Uno's)
 - AUC metrics for survival analysis
 - 5 epochs training
@@ -40,7 +40,7 @@ from concordance_pairwise_loss import ConcordancePairwiseLoss
 from survmnist import create_torchsurv_mnist_loaders
 from dataset_configs import DatasetConfig, load_dataset_configs
 
-# Set random seeds for reproducibility
+# 54random seeds for reproducibility
 from lightning.pytorch import seed_everything
 seed_everything(123, workers=True)
 
@@ -75,14 +75,14 @@ class LitMNISTEnhanced(L.LightningModule):
         """Initialize loss functions based on loss_type."""
         if self.loss_type == "nll":
             self.loss_fn = None  # Use neg_partial_log_likelihood directly
-        elif self.loss_type == "cpl_online":
+        elif self.loss_type == "cpl_dynamic":
             self.loss_fn = ConcordancePairwiseLoss(
                 reduction="mean",
                 temp_scaling='linear',
                 pairwise_sampling='balanced',
                 use_ipcw=True
             )
-        elif self.loss_type == "cpl_offline":
+        elif self.loss_type == "cpl_static":
             # For batch variant, we'll compute IPCW on the current batch
             # rather than using precomputed weights to avoid tensor size issues
             self.loss_fn = ConcordancePairwiseLoss(
@@ -297,7 +297,7 @@ def run_experiment(
     
     # Precompute IPCW weights for batch variant
     precomputed_ipcw_weights = None
-    if loss_type == "cpl_offline":
+    if loss_type == "cpl_static":
         print("Precomputing IPCW weights from full training set...")
         precomputed_ipcw_weights = precompute_ipcw_weights(train_loader)
         print(f"Precomputed IPCW weights for {len(precomputed_ipcw_weights)} training samples")
@@ -364,14 +364,16 @@ def run_experiment(
 def run_batch_size_comparison(
     batch_sizes: list = [32, 64, 128, 256],
     epochs: int = 5,
-    loss_types: list = ["nll", "cpl_online", "cpl_offline"],
+    loss_types: list = ["nll", "cpl_dynamic", "cpl_static"],
     temperatures: list = [1.0],
     output_dir: str = "results",
-    limit_train_batches: float = 0.1
+    limit_train_batches: float = 0.1,
+    num_runs: int = 1
 ) -> Dict[str, Any]:
-    """Run comprehensive comparison across batch sizes and loss types."""
+    """Run comprehensive comparison across batch sizes and loss types with multiple runs."""
     print(f"\n{'='*100}")
     print("COMPREHENSIVE BATCH SIZE AND LOSS COMPARISON")
+    print(f"Number of runs per configuration: {num_runs}")
     print(f"{'='*100}")
     
     all_results = []
@@ -381,31 +383,83 @@ def run_batch_size_comparison(
         
         for batch_size in batch_sizes:
             for temperature in temp_list:
-                try:
-                    result = run_experiment(
-                        batch_size=batch_size,
-                        epochs=epochs,
-                        loss_type=loss_type,
-                        temperature=temperature,
-                        output_dir=output_dir,
-                        limit_train_batches=limit_train_batches
-                    )
-                    all_results.append(result)
-                except Exception as e:
-                    print(f"Failed to run {loss_type} with batch_size={batch_size}, temp={temperature}: {e}")
-                    all_results.append({
-                        'loss_type': loss_type,
-                        'batch_size': batch_size,
-                        'epochs': epochs,
-                        'temperature': temperature,
-                        'metrics': {},
-                        'error': str(e)
-                    })
+                print(f"\n{'='*60}")
+                print(f"Running {loss_type.upper()} (batch_size={batch_size}, temp={temperature})")
+                print(f"Number of runs: {num_runs}")
+                print(f"{'='*60}")
+                
+                run_results = []
+                
+                for run_idx in range(num_runs):
+                    print(f"\n--- Run {run_idx + 1}/{num_runs} ---")
+                    try:
+                        # Set different seed for each run to ensure different random states
+                        seed_everything(123 + run_idx, workers=True)
+                        
+                        result = run_experiment(
+                            batch_size=batch_size,
+                            epochs=epochs,
+                            loss_type=loss_type,
+                            temperature=temperature,
+                            output_dir=output_dir,
+                            limit_train_batches=limit_train_batches
+                        )
+                        result['run_idx'] = run_idx
+                        run_results.append(result)
+                        all_results.append(result)
+                        
+                    except Exception as e:
+                        print(f"Failed to run {loss_type} with batch_size={batch_size}, temp={temperature}, run={run_idx+1}: {e}")
+                        error_result = {
+                            'loss_type': loss_type,
+                            'batch_size': batch_size,
+                            'epochs': epochs,
+                            'temperature': temperature,
+                            'run_idx': run_idx,
+                            'metrics': {},
+                            'error': str(e)
+                        }
+                        run_results.append(error_result)
+                        all_results.append(error_result)
+                
+                # Compute statistics for this configuration
+                if run_results and not any('error' in r for r in run_results):
+                    compute_run_statistics(run_results, loss_type, batch_size, temperature)
     
     # Save results
     save_results(all_results, output_dir)
     
     return all_results
+
+
+def compute_run_statistics(run_results: list, loss_type: str, batch_size: int, temperature: float):
+    """Compute mean and standard deviation for multiple runs of the same configuration."""
+    import numpy as np
+    
+    # Extract metrics from successful runs
+    metrics_data = {}
+    for result in run_results:
+        if 'error' not in result and 'metrics' in result:
+            for metric_name, metric_value in result['metrics'].items():
+                if not np.isnan(metric_value):
+                    if metric_name not in metrics_data:
+                        metrics_data[metric_name] = []
+                    metrics_data[metric_name].append(metric_value)
+    
+    if not metrics_data:
+        print(f"No valid metrics found for {loss_type} (batch_size={batch_size})")
+        return
+    
+    print(f"\nStatistics for {loss_type.upper()} (batch_size={batch_size}, temp={temperature}):")
+    print("-" * 60)
+    
+    for metric_name, values in metrics_data.items():
+        if values:
+            mean_val = np.mean(values)
+            std_val = np.std(values)
+            print(f"{metric_name:<20}: {mean_val:.4f} ± {std_val:.4f} (n={len(values)})")
+    
+    print("-" * 60)
 
 
 def save_results(results: list, output_dir: str, batch_size: int = None):
@@ -429,17 +483,19 @@ def main():
     """Main function with command line interface."""
     parser = argparse.ArgumentParser(description="Enhanced TorchSurv MNIST Training with CPL Support")
     parser.add_argument('--batch-size', type=int, default=64, help='Batch size for training')
-    parser.add_argument('--epochs', type=int, default=2, help='Number of training epochs')
-    parser.add_argument('--loss-type', choices=['nll', 'cpl_online', 'cpl_offline'], 
+    parser.add_argument('--epochs', type=int, default=10, help='Number of training epochs')
+    parser.add_argument('--loss-type', choices=['nll', 'cpl_dynamic', 'cpl_static'], 
                        default='nll', help='Loss function type')
     parser.add_argument('--temperature', type=float, default=1.0, help='Temperature for CPL losses')
     parser.add_argument('--output-dir', type=str, default='results', help='Output directory')
     parser.add_argument('--limit-train-batches', type=float, default=0.1, 
-                       help='Fraction of training data to use (0.1 = 10%)')
+                       help='Fraction of training data to use (0.1 = 10 percent)')
     parser.add_argument('--compare-all', action='store_true', 
                        help='Run comparison across all batch sizes and loss types')
-    parser.add_argument('--batch-sizes', nargs='+', type=int, default=[32, 64, 128, 256],
+    parser.add_argument('--batch-sizes', nargs='+', type=int, default=[64, 128, 256],
                        help='Batch sizes for comparison (used with --compare-all)')
+    parser.add_argument('--num-runs', type=int, default=1,
+                       help='Number of runs per configuration for statistical analysis')
     
     args = parser.parse_args()
     
@@ -449,27 +505,81 @@ def main():
             batch_sizes=args.batch_sizes,
             epochs=args.epochs,
             output_dir=args.output_dir,
-            limit_train_batches=args.limit_train_batches
+            limit_train_batches=args.limit_train_batches,
+            num_runs=args.num_runs
         )
         
-        # Print summary
-        print(f"\n{'='*110}")
+        # Print summary with statistics
+        print(f"\n{'='*120}")
         print("SUMMARY RESULTS")
-        print(f"{'='*110}")
-        print(f"{'Loss Type':<15} {'Batch Size':<10} {'Harrell C':<10} {'Uno C':<10} {'Cum AUC':<10} {'Inc AUC':<10} {'Brier':<10}")
-        print("-" * 100)
+        print(f"{'='*120}")
         
-        for result in results:
-            if 'error' not in result:
-                metrics = result.get('metrics', {})
-                print(f"{result['loss_type']:<15} {result['batch_size']:<10} "
-                      f"{metrics.get('harrell_cindex', 0.0):<10.4f} "
-                      f"{metrics.get('uno_cindex', 0.0):<10.4f} "
-                      f"{metrics.get('cumulative_auc', 0.0):<10.4f} "
-                      f"{metrics.get('incident_auc', 0.0):<10.4f} "
-                      f"{metrics.get('brier_score', float('nan')):<10.4f}")
-            else:
-                print(f"{result['loss_type']:<15} {result['batch_size']:<10} ERROR: {result['error']}")
+        if args.num_runs > 1:
+            print(f"{'Loss Type':<15} {'Batch Size':<10} {'Run':<4} {'Harrell C':<10} {'Uno C':<10} {'Cum AUC':<10} {'Inc AUC':<10} {'Brier':<10}")
+            print("-" * 120)
+            
+            for result in results:
+                if 'error' not in result:
+                    metrics = result.get('metrics', {})
+                    run_idx = result.get('run_idx', 0)
+                    print(f"{result['loss_type']:<15} {result['batch_size']:<10} {run_idx+1:<4} "
+                          f"{metrics.get('harrell_cindex', 0.0):<10.4f} "
+                          f"{metrics.get('uno_cindex', 0.0):<10.4f} "
+                          f"{metrics.get('cumulative_auc', 0.0):<10.4f} "
+                          f"{metrics.get('incident_auc', 0.0):<10.4f} "
+                          f"{metrics.get('brier_score', float('nan')):<10.4f}")
+                else:
+                    run_idx = result.get('run_idx', 0)
+                    print(f"{result['loss_type']:<15} {result['batch_size']:<10} {run_idx+1:<4} ERROR: {result['error']}")
+            
+            # Print aggregated statistics
+            print(f"\n{'='*120}")
+            print("AGGREGATED STATISTICS (Mean ± Std)")
+            print(f"{'='*120}")
+            print(f"{'Loss Type':<15} {'Batch Size':<10} {'Harrell C':<15} {'Uno C':<15} {'Cum AUC':<15} {'Inc AUC':<15} {'Brier':<15}")
+            print("-" * 120)
+            
+            # Group results by configuration
+            configs = {}
+            for result in results:
+                if 'error' not in result:
+                    key = (result['loss_type'], result['batch_size'])
+                    if key not in configs:
+                        configs[key] = []
+                    configs[key].append(result['metrics'])
+            
+            for (loss_type, batch_size), metrics_list in configs.items():
+                if metrics_list:
+                    import numpy as np
+                    harrell_vals = [m.get('harrell_cindex', 0.0) for m in metrics_list if not np.isnan(m.get('harrell_cindex', 0.0))]
+                    uno_vals = [m.get('uno_cindex', 0.0) for m in metrics_list if not np.isnan(m.get('uno_cindex', 0.0))]
+                    cum_auc_vals = [m.get('cumulative_auc', 0.0) for m in metrics_list if not np.isnan(m.get('cumulative_auc', 0.0))]
+                    inc_auc_vals = [m.get('incident_auc', 0.0) for m in metrics_list if not np.isnan(m.get('incident_auc', 0.0))]
+                    brier_vals = [m.get('brier_score', 0.0) for m in metrics_list if not np.isnan(m.get('brier_score', 0.0))]
+                    
+                    harrell_str = f"{np.mean(harrell_vals):.4f}±{np.std(harrell_vals):.4f}" if harrell_vals else "N/A"
+                    uno_str = f"{np.mean(uno_vals):.4f}±{np.std(uno_vals):.4f}" if uno_vals else "N/A"
+                    cum_auc_str = f"{np.mean(cum_auc_vals):.4f}±{np.std(cum_auc_vals):.4f}" if cum_auc_vals else "N/A"
+                    inc_auc_str = f"{np.mean(inc_auc_vals):.4f}±{np.std(inc_auc_vals):.4f}" if inc_auc_vals else "N/A"
+                    brier_str = f"{np.mean(brier_vals):.4f}±{np.std(brier_vals):.4f}" if brier_vals else "N/A"
+                    
+                    print(f"{loss_type:<15} {batch_size:<10} {harrell_str:<15} {uno_str:<15} {cum_auc_str:<15} {inc_auc_str:<15} {brier_str:<15}")
+        else:
+            # Single run format
+            print(f"{'Loss Type':<15} {'Batch Size':<10} {'Harrell C':<10} {'Uno C':<10} {'Cum AUC':<10} {'Inc AUC':<10} {'Brier':<10}")
+            print("-" * 100)
+            
+            for result in results:
+                if 'error' not in result:
+                    metrics = result.get('metrics', {})
+                    print(f"{result['loss_type']:<15} {result['batch_size']:<10} "
+                          f"{metrics.get('harrell_cindex', 0.0):<10.4f} "
+                          f"{metrics.get('uno_cindex', 0.0):<10.4f} "
+                          f"{metrics.get('cumulative_auc', 0.0):<10.4f} "
+                          f"{metrics.get('incident_auc', 0.0):<10.4f} "
+                          f"{metrics.get('brier_score', float('nan')):<10.4f}")
+                else:
+                    print(f"{result['loss_type']:<15} {result['batch_size']:<10} ERROR: {result['error']}")
     
     else:
         # Run single experiment

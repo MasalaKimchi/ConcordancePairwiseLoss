@@ -225,13 +225,17 @@ class PreprocessedMIMICBenchmarkRunnerV2(MIMICBenchmarkRunner):
             self.dataset_config
         )
     
-    def run_comparison(self, args=None) -> dict:
+    def run_comparison(self, args=None, loss_types=None) -> dict:
         """Run comparison with comprehensive evaluation."""
+        # Test each loss type (use provided loss_types or default)
+        if loss_types is None:
+            loss_types = ['nll', 'cpl_ipcw', 'cpl_ipcw_batch', 'ccl_ipcw', 'ccl_ipcw_batch']
+        
         print("=" * 80)
         print("MIMIC-IV CHEST X-RAY SURVIVAL ANALYSIS BENCHMARK V2")
         print("Training + Comprehensive Evaluation (Single Run)")
         print("=" * 80)
-        print(f"Core Loss Functions: NLL, CPL(ipcw), CPL(ipcw batch)")
+        print(f"Core Loss Functions: {', '.join([lt.upper() for lt in loss_types])}")
         print(f"Multiple Runs: {self.num_runs} independent runs per configuration")
         print(f"Data fraction: {self.data_fraction * 100:.1f}%")
         print(f"Comprehensive Metrics: Harrell's C, Uno's C, Cumulative AUC, Incident AUC, Brier Score")
@@ -279,9 +283,6 @@ class PreprocessedMIMICBenchmarkRunnerV2(MIMICBenchmarkRunner):
         self.dataloader_train = dataloader_train
         self.dataloader_val = dataloader_val
         self.dataloader_test = dataloader_test
-        
-        # Test each loss type
-        loss_types = ['nll', 'cpl_ipcw', 'cpl_ipcw_batch']
         
         results = {}
         
@@ -475,7 +476,9 @@ class PreprocessedMIMICBenchmarkRunnerV2(MIMICBenchmarkRunner):
         method_names = {
             'nll': 'NLL',
             'cpl_ipcw': 'CPL (ipcw)',
-            'cpl_ipcw_batch': 'CPL (ipcw batch)'
+            'cpl_ipcw_batch': 'CPL (ipcw batch)',
+            'ccl_ipcw': 'CCL (ipcw)',
+            'ccl_ipcw_batch': 'CCL (ipcw batch)'
         }
         
         # 1. Save summary CSV with mean metrics
@@ -582,7 +585,9 @@ class PreprocessedMIMICBenchmarkRunnerV2(MIMICBenchmarkRunner):
         method_names = {
             'nll': 'NLL',
             'cpl_ipcw': 'CPL (ipcw)',
-            'cpl_ipcw_batch': 'CPL (ipcw batch)'
+            'cpl_ipcw_batch': 'CPL (ipcw batch)',
+            'ccl_ipcw': 'CCL (ipcw)',
+            'ccl_ipcw_batch': 'CCL (ipcw batch)'
         }
         
         print(f"\nTest Set Results (Mean ± Std across {self.num_runs} runs):")
@@ -654,8 +659,18 @@ def main():
     parser.add_argument('--output-dir', type=str, default='results-batch-256', help='Output directory')
     parser.add_argument('--seed', type=int, default=42, help='Random seed')
     parser.add_argument('--num-runs', type=int, default=1, help='Number of independent runs per loss type')
+    parser.add_argument('--loss-types', type=str, nargs='+', 
+                       default=['nll', 'cpl_ipcw', 'cpl_ipcw_batch', 'ccl_ipcw', 'ccl_ipcw_batch'],
+                       choices=['nll', 'cpl', 'cpl_ipcw', 'cpl_ipcw_batch', 'ccl_ipcw', 'ccl_ipcw_batch'],
+                       help='Loss types to test. Default: all. Example: --loss-types ccl_ipcw ccl_ipcw_batch')
+    parser.add_argument('--ccl-only', action='store_true',
+                       help='Shortcut to run only CCL loss types (ccl_ipcw and ccl_ipcw_batch)')
     
     args = parser.parse_args()
+    
+    # Handle --ccl-only shortcut
+    if args.ccl_only:
+        args.loss_types = ['ccl_ipcw', 'ccl_ipcw_batch']
     
     # Check if preprocessed data exists
     if not os.path.exists(args.csv_path):
@@ -695,7 +710,7 @@ def main():
     )
     
     try:
-        results = runner.run_comparison(args)
+        results = runner.run_comparison(args, loss_types=args.loss_types)
         
         print(f"\n{'=' * 80}")
         print("BENCHMARK V2 COMPLETED SUCCESSFULLY")

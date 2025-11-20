@@ -2,6 +2,46 @@
 
 This enhanced version of the TorchSurv MNIST training script adds support for multiple loss functions, configurable batch sizes, and comprehensive evaluation metrics.
 
+#### Dataset Creation Methodology
+
+The SurvMNIST dataset converts MNIST handwritten digits into a survival analysis problem using a direct mapping approach:
+
+**Survival Time Assignment:**
+- Each MNIST digit (0-9) is mapped to a survival time
+- Digit 0 → survival time = 10 (to avoid log(0) issues in Cox models)
+- Digits 1-9 → survival time = digit value (1, 2, 3, ..., 9)
+- **Time range**: All survival times fall between 1 and 10 units
+
+**Censoring Mechanism (30% rate):**
+1. For each sample at index `i`, uses `random.seed(i)` for reproducibility
+2. Determines censoring: `is_censored = random.random() < 0.3`
+3. If censored (30% of samples):
+   - Event indicator: `event = False`
+   - Observed time: `random.uniform(1.0, true_survival_time)` 
+   - Censoring occurs before the event
+4. If not censored (70% of samples):
+   - Event indicator: `event = True`
+   - Observed time: `true_survival_time`
+
+**Why This Design?**
+- **Simplicity**: Direct digit-to-time mapping makes the problem interpretable
+- **Reproducibility**: Index-based seeding ensures consistent train/test splits
+- **IPCW Relevance**: 30% censoring rate creates sufficient censored data for IPCW weighting
+- **Model Testing**: Known ground truth allows validation of survival model predictions
+- **Quick Iteration**: MNIST's fast loading enables rapid algorithm development
+
+**Dataset Statistics:**
+- Training samples: 60,000 (42,000 events / 18,000 censored)
+- Test samples: 10,000 (7,000 events / 3,000 censored)
+- Survival time distribution: Depends on digit frequency in MNIST
+- Image size: 28×28 grayscale, resized to 224×224 for ResNet
+
+**For detailed usage and configuration**, see [src/survmnist/README.md](src/survmnist/README.md) which includes:
+- Dataset configuration and censoring methodology
+- Loss function variants explanation
+- Command-line arguments reference
+- Output format specifications
+
 ## Dataset Configuration
 
 **Default Censoring Rate**: 30% (0.3)
@@ -16,11 +56,11 @@ This enhanced version of the TorchSurv MNIST training script adds support for mu
 # Run with default parameters (NLL, batch_size=64, epochs=2)
 python benchmarks/benchmark_survmnist.py
 
-# Run with CPL (online) - IPCW computed per batch
-python benchmarks/benchmark_survmnist.py --loss-type cpl_online --batch-size 64 --epochs 5
+# Run with CPL (dynamic) - IPCW computed per batch
+python benchmarks/benchmark_survmnist.py --loss-type cpl_dynamic --batch-size 64 --epochs 5
 
-# Run with CPL (offline) - IPCW precomputed from full training set
-python benchmarks/benchmark_survmnist.py --loss-type cpl_offline --batch-size 64 --epochs 5
+# Run with CPL (static) - IPCW precomputed from full training set
+python benchmarks/benchmark_survmnist.py --loss-type cpl_static --batch-size 64 --epochs 5
 ```
 
 ### Comprehensive Comparison
@@ -42,7 +82,7 @@ python benchmarks/benchmark_survmnist.py --compare-all --limit-train-batches 0.2
 |----------|------|---------|-------------|
 | `--batch-size` | int | 64 | Batch size for training |
 | `--epochs` | int | 2 | Number of training epochs |
-| `--loss-type` | str | nll | Loss function: nll, cpl_online, cpl_offline |
+| `--loss-type` | str | nll | Loss function: nll, cpl_dynamic, cpl_static |
 | `--temperature` | float | 1.0 | Temperature for CPL losses |
 | `--output-dir` | str | results | Output directory for results |
 | `--limit-train-batches` | float | 0.1 | Fraction of training data to use |
@@ -54,7 +94,7 @@ python benchmarks/benchmark_survmnist.py --compare-all --limit-train-batches 0.2
 
 ### 1. **Loss Function Support**
 - Original: Only NLL (Cox loss)
-- Enhanced: NLL + 2 CPL variants (online/offline)
+- Enhanced: NLL + 2 CPL variants (dynamic/static)
 
 ### 2. **Batch Size Configuration**
 - Original: Fixed 500 (GPU) / 50 (CPU)
@@ -71,3 +111,28 @@ python benchmarks/benchmark_survmnist.py --compare-all --limit-train-batches 0.2
 ### 5. **Results Saving**
 - Original: No persistent results
 - Enhanced: JSON output with comprehensive metrics
+
+
+### SurvMNIST (Synthetic Survival Dataset)
+
+```bash
+# Run single experiment with default parameters (NLL, batch_size=64, epochs=2)
+python benchmarks/benchmark_survmnist.py
+
+# Run comprehensive comparison across all loss types and batch sizes
+python benchmarks/benchmark_survmnist.py --compare-all
+```
+
+**Key Features**:
+- **Synthetic survival data** from MNIST digits with 30% censoring rate
+- **Quick benchmarking**: Ideal for rapid prototyping and algorithm validation
+- **Multiple loss comparisons**: NLL, CPL(dynamic), CPL(static)
+- **Configurable batch sizes**: 32, 64, 128, 256
+- **Comprehensive metrics**: Harrell's C, Uno's C, Cumulative AUC, Incident AUC, Brier Score
+
+
+### Available Datasets
+- **Medical Imaging**: MIMIC-IV Chest X-ray (~300k images)
+- **Large tabular**: FLChain (7,874), SUPPORT2 (8,873)
+- **Medium tabular**: GBSG2 (686), METABRIC (1,903)
+- **Synthetic imaging**: SurvMNIST (MNIST-based survival, 60k train / 10k test, 30% censoring)
